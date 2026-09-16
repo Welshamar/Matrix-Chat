@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
 
 function formatTime(iso: string): string {
@@ -5,29 +6,58 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function statusLabel(status: LocalMessage["status"]): string {
-  switch (status) {
-    case "PENDING":
-      return "Sending...";
-    case "SENT":
-      return "Sent";
-    case "DELIVERED":
-      return "Delivered";
-    case "READ":
-      return "Read";
-    default:
-      return "";
-  }
+function StatusTick({ status }: { status: LocalMessage["status"] }) {
+  if (status === "PENDING") return <span className="tick tick-pending">🕐</span>;
+  if (status === "SENT") return <span className="tick">✓</span>;
+  if (status === "DELIVERED") return <span className="tick">✓✓</span>;
+  return <span className="tick tick-read">✓✓</span>; // READ
 }
 
-export function MessageBubble({ message }: { message: LocalMessage }) {
+interface MessageBubbleProps {
+  message: LocalMessage;
+  onOpenViewOnce: (messageId: string) => void;
+}
+
+export function MessageBubble({ message, onOpenViewOnce }: MessageBubbleProps) {
+  const [revealed, setRevealed] = useState(false);
+
+  const isViewOnce = !!message.viewOnce;
+  const isIncomingUnopened = isViewOnce && message.direction === "in" && !message.viewOnceOpened && !revealed;
+
+  function handleTap() {
+    if (!isIncomingUnopened) return;
+    setRevealed(true);
+    onOpenViewOnce(message.id);
+  }
+
+  let body: React.ReactNode = message.body;
+  let bubbleClass = `bubble ${message.direction}`;
+
+  if (isIncomingUnopened) {
+    body = "📷 Tap to view";
+    bubbleClass += " view-once-placeholder";
+  } else if (message.direction === "in" && isViewOnce && message.viewOnceOpened && !revealed) {
+    body = "🔥 Opened";
+    bubbleClass += " view-once-placeholder";
+  }
+
   return (
-    <div className={`bubble-row ${message.direction === "out" ? "out" : "in"}`}>
-      <div className={`bubble ${message.direction === "out" ? "out" : "in"}`}>
-        {message.body}
+    <div className={`bubble-row ${message.direction}`}>
+      <div className={bubbleClass} onClick={isIncomingUnopened ? handleTap : undefined}>
+        {body}
         <span className="meta">
+          {isViewOnce && <span className="view-once-badge">👁</span>}
           {formatTime(message.timestamp)}
-          {message.direction === "out" ? ` · ${statusLabel(message.status)}` : ""}
+          {message.direction === "out" && (
+            <>
+              {" "}
+              {isViewOnce && message.viewOnceOpened ? (
+                <span className="tick tick-read-label">Opened</span>
+              ) : (
+                <StatusTick status={message.status} />
+              )}
+            </>
+          )}
         </span>
       </div>
     </div>

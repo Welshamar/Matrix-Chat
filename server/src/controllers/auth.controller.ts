@@ -6,6 +6,9 @@ import { env } from "../config/env";
 
 const BCRYPT_ROUNDS = 12;
 const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
+const MAX_AVATAR_DATA_URL_LENGTH = 400_000; // ~300KB decoded — client resizes before upload
+const AVATAR_DATA_URL_PATTERN = /^data:image\/(png|jpeg|jpg|webp);base64,/;
+const MAX_STATUS_TEXT_LENGTH = 140;
 
 function issueToken(userId: string): string {
   return jwt.sign({ sub: userId }, env.JWT_SECRET, { expiresIn: "30d" });
@@ -32,7 +35,13 @@ export async function register(req: Request, res: Response): Promise<void> {
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   const user = await prisma.user.create({ data: { username, passwordHash } });
 
-  res.status(201).json({ userId: user.id, username: user.username, token: issueToken(user.id) });
+  res.status(201).json({
+    userId: user.id,
+    username: user.username,
+    avatarUrl: user.avatarUrl,
+    statusText: user.statusText,
+    token: issueToken(user.id),
+  });
 }
 
 export async function login(req: Request, res: Response): Promise<void> {
@@ -55,7 +64,13 @@ export async function login(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  res.json({ userId: user.id, username: user.username, token: issueToken(user.id) });
+  res.json({
+    userId: user.id,
+    username: user.username,
+    avatarUrl: user.avatarUrl,
+    statusText: user.statusText,
+    token: issueToken(user.id),
+  });
 }
 
 /** GET /api/auth/lookup/:username — resolve a username to a userId to start a chat. */
@@ -63,7 +78,7 @@ export async function lookupUsername(req: Request, res: Response): Promise<void>
   const { username } = req.params;
   const user = await prisma.user.findUnique({
     where: { username },
-    select: { id: true, username: true },
+    select: { id: true, username: true, avatarUrl: true, statusText: true },
   });
 
   if (!user) {
@@ -71,7 +86,7 @@ export async function lookupUsername(req: Request, res: Response): Promise<void>
     return;
   }
 
-  res.json({ userId: user.id, username: user.username });
+  res.json({ userId: user.id, username: user.username, avatarUrl: user.avatarUrl, statusText: user.statusText });
 }
 
 /** GET /api/auth/resolve/:userId — resolve a userId back to a username (e.g. for an inbound message from an unknown sender). */
@@ -79,7 +94,7 @@ export async function resolveUserId(req: Request, res: Response): Promise<void> 
   const { userId } = req.params;
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, username: true },
+    select: { id: true, username: true, avatarUrl: true, statusText: true },
   });
 
   if (!user) {
@@ -87,5 +102,35 @@ export async function resolveUserId(req: Request, res: Response): Promise<void> 
     return;
   }
 
-  res.json({ userId: user.id, username: user.username });
+  res.json({ userId: user.id, username: user.username, avatarUrl: user.avatarUrl, statusText: user.statusText });
+}
+
+/** PATCH /api/auth/profile — update your own avatar and/or status text. */
+export async function updateProfile(req: Request, res: Response): Promise<void> {
+  const userId = req.userId!;
+  const { avatarUrl, statusText } = req.body as { avatarUrl?: string | null; statusText?: string | null };
+
+  const data: { avatarUrl?: string | null; statusText?: string | null } = {};
+
+  if (avatarUrl !== undefined) {
+    if (avatarUrl !== null) {
+      if (avatarUrl.length > MAX_AVATAR_DATA_URL_LENGTH || !AVATAR_DATA_URL_PATTERN.test(avatarUrl)) {
+        res.status(400).json({ error: "avatarUrl must be a small png/jpeg/webp data URL (resize before upload)." });
+        return;
+      }
+    }
+    data.avatarUrl = avatarUrl;
+  }
+
+  if (statusText !== undefined) {
+    if (statusText !== null && statusText.length > MAX_STATUS_TEXT_LENGTH) {
+      res.status(400).json({ error: `statusText must be ${MAX_STATUS_TEXT_LENGTH} characters or fewer.` });
+      return;
+    }
+    data.statusText = statusText;
+  }
+
+  const user = await prisma.user.update({ where: { id: userId }, data });
+
+  res.json({ userId: user.id, username: user.username, avatarUrl: user.avatarUrl, statusText: user.statusText });
 }

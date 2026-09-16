@@ -19,11 +19,17 @@ export interface LocalMessage {
   body: string;
   timestamp: string;
   status: MessageStatus;
+  viewOnce?: boolean;
+  // For an incoming view-once message: whether the user has opened it yet
+  // (controls the blurred "tap to view" placeholder). For an outgoing one:
+  // whether the recipient has opened it (drives an "Opened" label).
+  viewOnceOpened?: boolean;
 }
 
 export interface Conversation {
   peerId: string;
   peerUsername: string;
+  peerAvatarUrl?: string | null;
   lastMessage: string;
   lastTimestamp: string;
 }
@@ -79,6 +85,12 @@ export async function updateMessageStatus(
 ): Promise<void> {
   const existing = await getMessages(userId, peerId);
   const updated = existing.map((m) => (m.id === messageId ? { ...m, status } : m));
+  await set(`conv:${peerId}`, updated, messagesStore(userId));
+}
+
+export async function markViewOnceOpened(userId: string, peerId: string, messageId: string): Promise<void> {
+  const existing = await getMessages(userId, peerId);
+  const updated = existing.map((m) => (m.id === messageId ? { ...m, viewOnceOpened: true } : m));
   await set(`conv:${peerId}`, updated, messagesStore(userId));
 }
 

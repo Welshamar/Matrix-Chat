@@ -3,6 +3,8 @@ const SESSION_KEY = "matrix-chat-session";
 export interface Session {
   userId: string;
   username: string;
+  avatarUrl: string | null;
+  statusText: string | null;
   token: string;
 }
 

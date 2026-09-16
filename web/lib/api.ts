@@ -3,7 +3,16 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 export interface AuthResponse {
   userId: string;
   username: string;
+  avatarUrl: string | null;
+  statusText: string | null;
   token: string;
+}
+
+export interface UserProfile {
+  userId: string;
+  username: string;
+  avatarUrl: string | null;
+  statusText: string | null;
 }
 
 async function publicRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,12 +42,19 @@ export function login(username: string, password: string): Promise<AuthResponse>
   return publicRequest("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
 }
 
-export function lookupUsername(token: string, username: string): Promise<{ userId: string; username: string }> {
+export function lookupUsername(token: string, username: string): Promise<UserProfile> {
   return authedRequest(`/api/auth/lookup/${encodeURIComponent(username)}`, token, { method: "GET" });
 }
 
-export function resolveUserId(token: string, userId: string): Promise<{ userId: string; username: string }> {
+export function resolveUserId(token: string, userId: string): Promise<UserProfile> {
   return authedRequest(`/api/auth/resolve/${encodeURIComponent(userId)}`, token, { method: "GET" });
+}
+
+export function updateProfile(
+  token: string,
+  patch: { avatarUrl?: string | null; statusText?: string | null }
+): Promise<UserProfile> {
+  return authedRequest("/api/auth/profile", token, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
 export interface InboxEnvelope {
@@ -46,6 +62,7 @@ export interface InboxEnvelope {
   senderId: string;
   ciphertext: string;
   signalMessageType: number;
+  viewOnce: boolean;
   timestamp: string;
 }
 

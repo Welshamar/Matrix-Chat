@@ -9,7 +9,7 @@ export function createApp(): Express {
   const app = express();
 
   app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(express.json({ limit: "256kb" }));
+  app.use(express.json({ limit: "600kb" })); // headroom for base64 avatar uploads (capped at ~400KB)
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
 

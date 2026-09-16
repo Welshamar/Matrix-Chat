@@ -14,6 +14,8 @@ model User {
   username       String   @unique
   passwordHash   String
   registrationId Int?
+  avatarUrl      String? // small base64 data: URL, client-resized — no object storage configured
+  statusText     String? @default("Hey there! I am using Matrix Chat.")
   createdAt      DateTime @default(now())
 
   identityKey    IdentityKey?
@@ -76,8 +78,10 @@ model Message {
   id                String        @id @default(uuid())
   senderId          String
   recipientId       String
-  ciphertext        String // base64 Signal ciphertext blob — opaque to the server
+  ciphertext        String? // base64 Signal ciphertext blob — opaque to the server; nulled out once a view-once message has been viewed
   signalMessageType Int // 3 = PreKeyWhisperMessage, 1 = WhisperMessage
+  viewOnce          Boolean       @default(false)
+  viewedAt          DateTime?
   status            MessageStatus @default(SENT)
   timestamp         DateTime      @default(now())
 

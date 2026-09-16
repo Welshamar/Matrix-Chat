@@ -16,12 +16,15 @@ export async function fetchInbox(req: Request, res: Response): Promise<void> {
   });
 
   res.json(
-    pending.map((m) => ({
-      id: m.id,
-      senderId: m.senderId,
-      ciphertext: m.ciphertext,
-      signalMessageType: m.signalMessageType,
-      timestamp: m.timestamp,
-    }))
+    pending
+      .filter((m) => m.ciphertext !== null)
+      .map((m) => ({
+        id: m.id,
+        senderId: m.senderId,
+        ciphertext: m.ciphertext as string,
+        signalMessageType: m.signalMessageType,
+        viewOnce: m.viewOnce,
+        timestamp: m.timestamp,
+      }))
   );
 }

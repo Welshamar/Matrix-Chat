@@ -4,8 +4,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Socket } from "socket.io-client";
 import { clearSession, loadSession, Session } from "@/lib/auth";
-import { fetchInbox, lookupUsername, resolveUserId } from "@/lib/api";
-import { connectSignalSocket, InboundSignalMessage, sendReceipt, sendSignalMessage, SignalReceiptEvent } from "@/lib/socket";
+import { fetchInbox, lookupUsername, resolveUserId, updateProfile } from "@/lib/api";
+import {
+  connectSignalSocket,
+  InboundSignalMessage,
+  sendReceipt,
+  sendSignalMessage,
+  sendViewed,
+  SignalReceiptEvent,
+  SignalViewedEvent,
+} from "@/lib/socket";
 import { SignalClient } from "@/lib/signal/signalClient";
 import {
   appendMessage,
@@ -13,10 +21,14 @@ import {
   getConversations,
   getMessages,
   LocalMessage,
+  markViewOnceOpened,
   updateMessageStatus,
   upsertConversation,
 } from "@/lib/localDb";
 import { MessageBubble } from "@/components/MessageBubble";
+import { Avatar } from "@/components/Avatar";
+import { EmojiPicker } from "@/components/EmojiPicker";
+import { ProfileModal } from "@/components/ProfileModal";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -30,6 +42,9 @@ export default function ChatPage() {
   const [newChatError, setNewChatError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [viewOnceArmed, setViewOnceArmed] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -45,22 +60,38 @@ export default function ChatPage() {
     setConversations(await getConversations(userId));
   }, []);
 
-  // Resolves a username for a peer we may not have met before, then
-  // upserts a conversation entry so it shows up in the sidebar.
+  // Resolves a username + avatar for a peer we may not have met before,
+  // then upserts a conversation entry so it shows up in the sidebar.
   const ensureConversation = useCallback(
     async (userId: string, token: string, peerId: string, lastMessage: string, lastTimestamp: string) => {
-      let peerUsername = conversations.find((c) => c.peerId === peerId)?.peerUsername;
+      const known = conversations.find((c) => c.peerId === peerId);
+      let peerUsername = known?.peerUsername;
+      let peerAvatarUrl = known?.peerAvatarUrl;
       if (!peerUsername) {
         const resolved = await resolveUserId(token, peerId);
         peerUsername = resolved.username;
+        peerAvatarUrl = resolved.avatarUrl;
       }
-      const conv: Conversation = { peerId, peerUsername, lastMessage, lastTimestamp };
+      const conv: Conversation = { peerId, peerUsername, peerAvatarUrl, lastMessage, lastTimestamp };
       await upsertConversation(userId, conv);
       await refreshConversations(userId);
       return conv;
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [refreshConversations]
+  );
+
+  // Marks any unread incoming messages in `peerId`'s history as READ and
+  // tells the sender, so their bubble turns into a blue double-tick.
+  const markConversationRead = useCallback(
+    async (userId: string, peerId: string, socket: Socket) => {
+      const history = await getMessages(userId, peerId);
+      const unread = history.filter((m) => m.direction === "in" && m.status !== "READ");
+      for (const m of unread) {
+        await sendReceipt(socket, m.id, "READ");
+      }
+    },
+    []
   );
 
   useEffect(() => {
@@ -104,7 +135,7 @@ export default function ChatPage() {
             signalMessageType: msg.signalMessageType,
           });
 
-          await ensureConversation(session.userId, session.token, msg.senderId, plaintext, msg.timestamp);
+          await ensureConversation(session.userId, session.token, msg.senderId, msg.viewOnce ? "📷 View once photo" : plaintext, msg.timestamp);
 
           await appendMessage(session.userId, msg.senderId, {
             id: msg.id,
@@ -112,6 +143,7 @@ export default function ChatPage() {
             body: plaintext,
             timestamp: msg.timestamp,
             status: "DELIVERED",
+            viewOnce: msg.viewOnce,
           });
 
           if (activePeerRef.current?.peerId === msg.senderId) {
@@ -134,6 +166,19 @@ export default function ChatPage() {
         }
       });
 
+      // Sender-side notification that a view-once message we sent has been
+      // opened by the recipient — flips its bubble to an "Opened" label.
+      socket.on("signal:viewed", async (evt: SignalViewedEvent) => {
+        try {
+          await markViewOnceOpened(session.userId, evt.from, evt.messageId);
+          if (activePeerRef.current?.peerId === evt.from) {
+            setMessages(await getMessages(session.userId, evt.from));
+          }
+        } catch (err) {
+          console.error(`Failed to process view notice for ${evt.messageId}:`, err);
+        }
+      });
+
       // Catch up on anything sent while we were offline. Each message is
       // handled independently — one bad/undecryptable message (e.g. a key
       // already consumed by an earlier interrupted attempt) must not take
@@ -145,13 +190,14 @@ export default function ChatPage() {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
-          await ensureConversation(session.userId, session.token, msg.senderId, plaintext, msg.timestamp);
+          await ensureConversation(session.userId, session.token, msg.senderId, msg.viewOnce ? "📷 View once photo" : plaintext, msg.timestamp);
           await appendMessage(session.userId, msg.senderId, {
             id: msg.id,
             direction: "in",
             body: plaintext,
             timestamp: msg.timestamp,
             status: "DELIVERED",
+            viewOnce: msg.viewOnce,
           });
         } catch (err) {
           console.error(`Failed to process inbox message ${msg.id}, skipping:`, err);
@@ -183,7 +229,12 @@ export default function ChatPage() {
   async function handleSelectConversation(conv: Conversation) {
     if (!session) return;
     setActivePeer(conv);
+    setShowEmojiPicker(false);
     setMessages(await getMessages(session.userId, conv.peerId));
+    if (socketRef.current) {
+      await markConversationRead(session.userId, conv.peerId, socketRef.current);
+      setMessages(await getMessages(session.userId, conv.peerId));
+    }
   }
 
   async function handleStartChat(e: React.FormEvent) {
@@ -204,6 +255,7 @@ export default function ChatPage() {
       const conv: Conversation = existing ?? {
         peerId: found.userId,
         peerUsername: found.username,
+        peerAvatarUrl: found.avatarUrl,
         lastMessage: "",
         lastTimestamp: new Date().toISOString(),
       };
@@ -222,9 +274,16 @@ export default function ChatPage() {
     if (!text || !session || !activePeer || !clientRef.current || !socketRef.current) return;
 
     setSending(true);
+    const wasViewOnce = viewOnceArmed;
     try {
       const envelope = await clientRef.current.encryptMessage(activePeer.peerId, text);
-      const ack = await sendSignalMessage(socketRef.current, activePeer.peerId, envelope.ciphertext, envelope.signalMessageType);
+      const ack = await sendSignalMessage(
+        socketRef.current,
+        activePeer.peerId,
+        envelope.ciphertext,
+        envelope.signalMessageType,
+        wasViewOnce
+      );
 
       if (!ack.ok || !ack.messageId) {
         throw new Error(ack.error ?? "Failed to send message.");
@@ -237,11 +296,14 @@ export default function ChatPage() {
         body: text,
         timestamp,
         status: "SENT",
+        viewOnce: wasViewOnce,
       });
-      await upsertConversation(session.userId, { ...activePeer, lastMessage: text, lastTimestamp: timestamp });
+      const preview = wasViewOnce ? "📷 View once photo" : text;
+      await upsertConversation(session.userId, { ...activePeer, lastMessage: preview, lastTimestamp: timestamp });
       await refreshConversations(session.userId);
       setMessages(await getMessages(session.userId, activePeer.peerId));
       setDraft("");
+      setViewOnceArmed(false);
     } catch (err) {
       console.error(err);
     } finally {
@@ -249,10 +311,29 @@ export default function ChatPage() {
     }
   }
 
+  async function handleOpenViewOnce(messageId: string) {
+    if (!session || !activePeer || !socketRef.current) return;
+    await markViewOnceOpened(session.userId, activePeer.peerId, messageId);
+    await sendViewed(socketRef.current, messageId);
+  }
+
+  async function handleSaveProfile(patch: { avatarUrl?: string | null; statusText?: string | null }) {
+    if (!session) return;
+    const updated = await updateProfile(session.token, patch);
+    const nextSession: Session = { ...session, avatarUrl: updated.avatarUrl, statusText: updated.statusText };
+    setSession(nextSession);
+    localStorage.setItem("matrix-chat-session", JSON.stringify(nextSession));
+  }
+
   function handleLogout() {
     socketRef.current?.disconnect();
     clearSession();
     router.replace("/login");
+  }
+
+  function handleSelectEmoji(emoji: string) {
+    setDraft((d) => d + emoji);
+    setShowEmojiPicker(false);
   }
 
   if (!session) {
@@ -267,10 +348,16 @@ export default function ChatPage() {
     <div className="chat-shell">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <div className="me">
-            <span className={`conn-dot ${connected ? "online" : ""}`} />
-            {session.username}
-          </div>
+          <button className="me" onClick={() => setShowProfileModal(true)}>
+            <Avatar name={session.username} avatarUrl={session.avatarUrl} size={36} />
+            <span className="me-text">
+              <span className="me-name">
+                <span className={`conn-dot ${connected ? "online" : ""}`} />
+                {session.username}
+              </span>
+              <span className="me-status">{session.statusText}</span>
+            </span>
+          </button>
           <button className="logout-btn" onClick={handleLogout}>
             Log out
           </button>
@@ -284,7 +371,7 @@ export default function ChatPage() {
           />
           <button type="submit">Go</button>
         </form>
-        {newChatError && <div style={{ padding: "0 16px 8px", color: "#ff9d9d", fontSize: 12 }}>{newChatError}</div>}
+        {newChatError && <div className="inline-error">{newChatError}</div>}
 
         <div className="conversation-list">
           {conversations.length === 0 && (
@@ -296,8 +383,11 @@ export default function ChatPage() {
               className={`conversation-item ${activePeer?.peerId === conv.peerId ? "active" : ""}`}
               onClick={() => handleSelectConversation(conv)}
             >
-              <span className="peer">{conv.peerUsername}</span>
-              <span className="preview">{conv.lastMessage || "No messages yet"}</span>
+              <Avatar name={conv.peerUsername} avatarUrl={conv.peerAvatarUrl} size={44} />
+              <span className="conversation-text">
+                <span className="peer">{conv.peerUsername}</span>
+                <span className="preview">{conv.lastMessage || "No messages yet"}</span>
+              </span>
             </div>
           ))}
         </div>
@@ -309,28 +399,63 @@ export default function ChatPage() {
         ) : (
           <>
             <div className="chat-header">
-              {activePeer.peerUsername}
-              <span className="lock">🔒 End-to-end encrypted</span>
+              <Avatar name={activePeer.peerUsername} avatarUrl={activePeer.peerAvatarUrl} size={38} />
+              <span className="chat-header-text">
+                <span className="chat-header-name">{activePeer.peerUsername}</span>
+                <span className="lock">🔒 End-to-end encrypted</span>
+              </span>
             </div>
             <div className="message-list" ref={messageListRef}>
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
+                <MessageBubble key={m.id} message={m} onOpenViewOnce={handleOpenViewOnce} />
               ))}
             </div>
             <form className="composer" onSubmit={handleSend}>
+              <div className="composer-emoji-wrap">
+                <button
+                  type="button"
+                  className="composer-icon-btn"
+                  onClick={() => setShowEmojiPicker((v) => !v)}
+                  aria-label="Emoji"
+                >
+                  😊
+                </button>
+                {showEmojiPicker && (
+                  <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
+                )}
+              </div>
+              <button
+                type="button"
+                className={`composer-icon-btn ${viewOnceArmed ? "armed" : ""}`}
+                onClick={() => setViewOnceArmed((v) => !v)}
+                aria-label="Toggle view-once"
+                title="Send as view-once"
+              >
+                {viewOnceArmed ? "1️⃣" : "👁"}
+              </button>
               <input
-                placeholder="Type a message"
+                placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 disabled={sending}
               />
-              <button type="submit" disabled={sending || !draft.trim()}>
+              <button type="submit" className="composer-send-btn" disabled={sending || !draft.trim()}>
                 ➤
               </button>
             </form>
           </>
         )}
       </main>
+
+      {showProfileModal && (
+        <ProfileModal
+          username={session.username}
+          avatarUrl={session.avatarUrl}
+          statusText={session.statusText}
+          onSave={handleSaveProfile}
+          onClose={() => setShowProfileModal(false)}
+        />
+      )}
     </div>
   );
 }

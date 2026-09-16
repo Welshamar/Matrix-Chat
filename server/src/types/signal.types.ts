@@ -30,11 +30,18 @@ export interface SignalMessagePayload {
   ciphertext: string; // base64 — opaque to the server
   signalMessageType: number; // 3 = PreKeyWhisperMessage, 1 = WhisperMessage
   clientMessageId?: string;
+  viewOnce?: boolean;
 }
 
 export interface SignalReceiptPayload {
   messageId: string;
   status: "DELIVERED" | "READ";
+}
+
+/** Sent by the recipient once a view-once message has been shown; tells the
+ *  server to discard the ciphertext and tells the sender it was consumed. */
+export interface SignalViewedPayload {
+  messageId: string;
 }
 
 export interface SocketAck {

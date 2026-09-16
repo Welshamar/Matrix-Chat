@@ -6,12 +6,18 @@ export interface InboundSignalMessage {
   senderId: string;
   ciphertext: string;
   signalMessageType: number;
+  viewOnce: boolean;
   timestamp: string;
 }
 
 export interface SignalReceiptEvent {
   messageId: string;
   status: "DELIVERED" | "READ";
+  from: string;
+}
+
+export interface SignalViewedEvent {
+  messageId: string;
   from: string;
 }
 
@@ -29,15 +35,22 @@ export function sendSignalMessage(
   socket: Socket,
   recipientId: string,
   ciphertext: string,
-  signalMessageType: number
+  signalMessageType: number,
+  viewOnce = false
 ): Promise<SocketAck> {
   return new Promise((resolve) => {
-    socket.emit("signal:message", { recipientId, ciphertext, signalMessageType }, resolve);
+    socket.emit("signal:message", { recipientId, ciphertext, signalMessageType, viewOnce }, resolve);
   });
 }
 
 export function sendReceipt(socket: Socket, messageId: string, status: "DELIVERED" | "READ"): Promise<SocketAck> {
   return new Promise((resolve) => {
     socket.emit("signal:receipt", { messageId, status }, resolve);
+  });
+}
+
+export function sendViewed(socket: Socket, messageId: string): Promise<SocketAck> {
+  return new Promise((resolve) => {
+    socket.emit("signal:viewed", { messageId }, resolve);
   });
 }
