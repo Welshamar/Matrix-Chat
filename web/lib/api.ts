@@ -63,7 +63,7 @@ export interface InboxEnvelope {
   ciphertext: string;
   signalMessageType: number;
   viewOnce: boolean;
-  kind: "TEXT" | "VOICE";
+  kind: "TEXT" | "VOICE" | "FILE";
   groupId: string | null;
   timestamp: string;
 }

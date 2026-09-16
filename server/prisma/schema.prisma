@@ -107,6 +107,7 @@ model Message {
 enum MessageKind {
   TEXT
   VOICE
+  FILE
 }
 
 // A group's membership roster. Encryption is still purely pairwise (see

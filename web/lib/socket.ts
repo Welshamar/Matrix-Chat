@@ -1,7 +1,7 @@
 import { io, Socket } from "socket.io-client";
 import { API_URL } from "./api";
 
-export type MessageKind = "TEXT" | "VOICE";
+export type MessageKind = "TEXT" | "VOICE" | "FILE";
 
 export interface InboundSignalMessage {
   id: string;

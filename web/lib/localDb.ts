@@ -1,5 +1,5 @@
 import { createStore, get, set, UseStore } from "idb-keyval";
-import { ReplyRef } from "./messageEnvelope";
+import { FileMeta, ReplyRef } from "./messageEnvelope";
 
 /**
  * Local, per-browser cache of decrypted chat history and the conversation
@@ -14,7 +14,7 @@ import { ReplyRef } from "./messageEnvelope";
 export type MessageDirection = "in" | "out";
 export type MessageStatus = "PENDING" | "SENT" | "DELIVERED" | "READ";
 
-export type MessageKind = "TEXT" | "VOICE";
+export type MessageKind = "TEXT" | "VOICE" | "FILE";
 
 export interface LocalMessage {
   id: string;
@@ -33,6 +33,9 @@ export interface LocalMessage {
   senderId?: string;
   senderUsername?: string;
   replyTo?: ReplyRef;
+  // Only present for kind "FILE" — `body` is the data URL itself, this is
+  // the original file's metadata (the data URL alone loses the filename).
+  file?: FileMeta;
 }
 
 export interface Conversation {

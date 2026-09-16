@@ -47,7 +47,7 @@ import {
   upsertConversation,
   upsertGroup,
 } from "@/lib/localDb";
-import { encodeEnvelope, decodeEnvelope, ReplyRef } from "@/lib/messageEnvelope";
+import { encodeEnvelope, decodeEnvelope, FileMeta, ReplyRef } from "@/lib/messageEnvelope";
 import { MessageBubble } from "@/components/MessageBubble";
 import { Avatar } from "@/components/Avatar";
 import { EmojiPicker } from "@/components/EmojiPicker";
@@ -55,6 +55,7 @@ import { ProfileModal } from "@/components/ProfileModal";
 import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
+import { FileAttachButton } from "@/components/FileAttachButton";
 
 type ChatFilter = "all" | "unread" | "favourites" | "groups";
 
@@ -214,14 +215,14 @@ export default function ChatPage() {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
-          const { text: plaintext, replyTo } = decodeEnvelope(rawPlaintext);
+          const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
 
           if (msg.groupId) {
             const group = await ensureGroup(
               session.userId,
               session.token,
               msg.groupId,
-              summarize(msg.kind, msg.viewOnce, plaintext),
+              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
               msg.timestamp
             );
             const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
@@ -236,6 +237,7 @@ export default function ChatPage() {
               senderId: msg.senderId,
               senderUsername,
               replyTo,
+              file,
             });
 
             if (activeGroupRef.current?.groupId === msg.groupId) {
@@ -250,7 +252,7 @@ export default function ChatPage() {
               session.userId,
               session.token,
               msg.senderId,
-              summarize(msg.kind, msg.viewOnce, plaintext),
+              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
               msg.timestamp
             );
             await appendMessage(session.userId, msg.senderId, {
@@ -262,6 +264,7 @@ export default function ChatPage() {
               viewOnce: msg.viewOnce,
               kind: msg.kind,
               replyTo,
+              file,
             });
 
             if (activePeerRef.current?.peerId === msg.senderId) {
@@ -331,13 +334,13 @@ export default function ChatPage() {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
-          const { text: plaintext, replyTo } = decodeEnvelope(rawPlaintext);
+          const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
           if (msg.groupId) {
             const group = await ensureGroup(
               session.userId,
               session.token,
               msg.groupId,
-              summarize(msg.kind, msg.viewOnce, plaintext),
+              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
               msg.timestamp
             );
             const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
@@ -352,6 +355,7 @@ export default function ChatPage() {
               senderId: msg.senderId,
               senderUsername,
               replyTo,
+              file,
             });
             await incrementGroupUnread(session.userId, msg.groupId);
           } else {
@@ -359,7 +363,7 @@ export default function ChatPage() {
               session.userId,
               session.token,
               msg.senderId,
-              summarize(msg.kind, msg.viewOnce, plaintext),
+              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
               msg.timestamp
             );
             await appendMessage(session.userId, msg.senderId, {
@@ -371,6 +375,7 @@ export default function ChatPage() {
               viewOnce: msg.viewOnce,
               kind: msg.kind,
               replyTo,
+              file,
             });
             await incrementUnread(session.userId, msg.senderId);
           }
@@ -521,10 +526,15 @@ export default function ChatPage() {
     }
   }
 
-  async function sendToActiveThread(body: string, kind: "TEXT" | "VOICE", replyTo?: ReplyRef) {
+  async function sendToActiveThread(
+    body: string,
+    kind: "TEXT" | "VOICE" | "FILE",
+    replyTo?: ReplyRef,
+    file?: FileMeta
+  ) {
     if (!session || !clientRef.current || !socketRef.current) return;
     const wasViewOnce = viewOnceArmed && kind === "TEXT";
-    const wireBody = encodeEnvelope(body, replyTo);
+    const wireBody = encodeEnvelope(body, { replyTo, file });
 
     if (activeGroup) {
       const others = activeGroup.members.filter((m) => m.userId !== session.userId);
@@ -551,10 +561,11 @@ export default function ChatPage() {
         senderId: session.userId,
         senderUsername: session.username,
         replyTo,
+        file,
       });
       await upsertGroup(session.userId, {
         groupId: activeGroup.groupId,
-        lastMessage: summarize(kind, false, body),
+        lastMessage: summarize(kind, false, body, file?.name),
         lastTimestamp: timestamp,
       });
       await refreshGroups(session.userId);
@@ -586,10 +597,11 @@ export default function ChatPage() {
       viewOnce: wasViewOnce,
       kind,
       replyTo,
+      file,
     });
     await upsertConversation(session.userId, {
       peerId: activePeer.peerId,
-      lastMessage: summarize(kind, wasViewOnce, body),
+      lastMessage: summarize(kind, wasViewOnce, body, file?.name),
       lastTimestamp: timestamp,
     });
     await refreshConversations(session.userId);
@@ -607,7 +619,7 @@ export default function ChatPage() {
     return {
       messageId: m.id,
       senderLabel: replySenderLabelFor(m),
-      preview: summarize(m.kind ?? "TEXT", m.viewOnce, m.body),
+      preview: summarize(m.kind ?? "TEXT", m.viewOnce, m.body, m.file?.name),
     };
   }
 
@@ -626,7 +638,7 @@ export default function ChatPage() {
     setMessages(updated);
 
     const last = updated[updated.length - 1];
-    const lastMessage = last ? summarize(last.kind ?? "TEXT", last.viewOnce, last.body) : "";
+    const lastMessage = last ? summarize(last.kind ?? "TEXT", last.viewOnce, last.body, last.file?.name) : "";
     const lastTimestamp = last ? last.timestamp : new Date().toISOString();
     if (activeGroup) {
       await upsertGroup(session.userId, { groupId: activeGroup.groupId, lastMessage, lastTimestamp });
@@ -661,6 +673,19 @@ export default function ChatPage() {
     try {
       const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
       await sendToActiveThread(dataUrl, "VOICE", replyRef);
+      setReplyingTo(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleFileSelected(dataUrl: string, meta: FileMeta) {
+    setSending(true);
+    try {
+      const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
+      await sendToActiveThread(dataUrl, "FILE", replyRef, meta);
       setReplyingTo(null);
     } catch (err) {
       console.error(err);
@@ -924,7 +949,7 @@ export default function ChatPage() {
                 <div className="reply-preview-text">
                   <span className="reply-preview-sender">{replySenderLabelFor(replyingTo)}</span>
                   <span className="reply-preview-body">
-                    {summarize(replyingTo.kind ?? "TEXT", replyingTo.viewOnce, replyingTo.body)}
+                    {summarize(replyingTo.kind ?? "TEXT", replyingTo.viewOnce, replyingTo.body, replyingTo.file?.name)}
                   </span>
                 </div>
                 <button
@@ -955,6 +980,7 @@ export default function ChatPage() {
                 {showEmojiPicker && (
                   <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
                 )}
+                <FileAttachButton onFileSelected={handleFileSelected} disabled={sending} />
                 <input
                   ref={composerInputRef}
                   placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
@@ -1021,7 +1047,13 @@ export default function ChatPage() {
   );
 }
 
-function summarize(kind: "TEXT" | "VOICE", viewOnce: boolean | undefined, plaintext: string): string {
+function summarize(
+  kind: "TEXT" | "VOICE" | "FILE",
+  viewOnce: boolean | undefined,
+  plaintext: string,
+  fileName?: string
+): string {
+  if (kind === "FILE") return `📎 ${fileName ?? "Attachment"}`;
   if (kind === "VOICE") return "🎤 Voice message";
   if (viewOnce) return "📷 View once photo";
   return plaintext;

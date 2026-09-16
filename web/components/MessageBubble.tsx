@@ -6,6 +6,22 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileIconFor(mime: string): string {
+  if (mime.startsWith("video/")) return "🎬";
+  if (mime === "application/pdf") return "📕";
+  if (mime.includes("zip") || mime.includes("compressed")) return "🗜";
+  if (mime.startsWith("audio/")) return "🎵";
+  if (mime.includes("word") || mime.includes("document")) return "📝";
+  if (mime.includes("sheet") || mime.includes("excel")) return "📊";
+  return "📄";
+}
+
 const EMOJI_ONLY_MAX_CHARS = 12;
 const SWIPE_TRIGGER_PX = 56;
 const SWIPE_MAX_PX = 72;
@@ -48,6 +64,7 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
   );
 
   const isVoice = message.kind === "VOICE";
+  const isFile = message.kind === "FILE" && !!message.file;
   const isViewOnce = !!message.viewOnce && !isVoice;
   const isIncomingUnopened = isViewOnce && message.direction === "in" && !message.viewOnceOpened && !revealed;
 
@@ -122,6 +139,27 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
   } else if (isVoice) {
     body = <audio controls preload="none" src={message.body} className="voice-player" />;
     bubbleClass += " voice-bubble";
+  } else if (isFile && message.file) {
+    const file = message.file;
+    if (file.mime.startsWith("image/")) {
+      body = (
+        <a href={message.body} target="_blank" rel="noopener noreferrer" className="file-image-link">
+          <img src={message.body} alt={file.name} className="file-image" />
+        </a>
+      );
+      bubbleClass += " file-bubble file-bubble-image";
+    } else {
+      body = (
+        <a href={message.body} download={file.name} className="file-card">
+          <span className="file-card-icon">{fileIconFor(file.mime)}</span>
+          <span className="file-card-info">
+            <span className="file-card-name">{file.name}</span>
+            <span className="file-card-size">{formatFileSize(file.size)}</span>
+          </span>
+        </a>
+      );
+      bubbleClass += " file-bubble";
+    }
   } else if (isEmojiOnly(message.body)) {
     bubbleClass += " emoji-only";
   }
