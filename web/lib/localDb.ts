@@ -32,6 +32,8 @@ export interface Conversation {
   peerAvatarUrl?: string | null;
   lastMessage: string;
   lastTimestamp: string;
+  favourite?: boolean;
+  unreadCount?: number;
 }
 
 const MAX_MESSAGES_PER_CONVERSATION = 500;
@@ -98,13 +100,46 @@ export async function getConversations(userId: string): Promise<Conversation[]> 
   return (await get<Conversation[]>("conversations", metaStore(userId))) ?? [];
 }
 
-export async function upsertConversation(userId: string, conv: Conversation): Promise<void> {
+// Merges into any existing record for `patch.peerId` rather than replacing
+// it outright, so a partial update (e.g. just bumping unreadCount) doesn't
+// clobber fields like `favourite` that weren't part of this particular call.
+export async function upsertConversation(
+  userId: string,
+  patch: Partial<Conversation> & { peerId: string }
+): Promise<void> {
   const existing = await getConversations(userId);
-  const others = existing.filter((c) => c.peerId !== conv.peerId);
-  const updated = [conv, ...others].sort(
+  const current = existing.find((c) => c.peerId === patch.peerId);
+  const merged: Conversation = {
+    peerId: patch.peerId,
+    peerUsername: patch.peerUsername ?? current?.peerUsername ?? "",
+    peerAvatarUrl: patch.peerAvatarUrl ?? current?.peerAvatarUrl ?? null,
+    lastMessage: patch.lastMessage ?? current?.lastMessage ?? "",
+    lastTimestamp: patch.lastTimestamp ?? current?.lastTimestamp ?? new Date().toISOString(),
+    favourite: patch.favourite ?? current?.favourite ?? false,
+    unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
+  };
+  const others = existing.filter((c) => c.peerId !== patch.peerId);
+  const updated = [merged, ...others].sort(
     (a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime()
   );
   await set("conversations", updated, metaStore(userId));
+}
+
+export async function toggleFavourite(userId: string, peerId: string): Promise<void> {
+  const existing = await getConversations(userId);
+  const current = existing.find((c) => c.peerId === peerId);
+  if (!current) return;
+  await upsertConversation(userId, { peerId, favourite: !current.favourite });
+}
+
+export async function incrementUnread(userId: string, peerId: string): Promise<void> {
+  const existing = await getConversations(userId);
+  const current = existing.find((c) => c.peerId === peerId);
+  await upsertConversation(userId, { peerId, unreadCount: (current?.unreadCount ?? 0) + 1 });
+}
+
+export async function clearUnread(userId: string, peerId: string): Promise<void> {
+  await upsertConversation(userId, { peerId, unreadCount: 0 });
 }
 
 export async function getContactUsername(userId: string, peerId: string): Promise<string | undefined> {

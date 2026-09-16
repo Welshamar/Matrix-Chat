@@ -1,4 +1,4 @@
-import express, { Express } from "express";
+import express, { Express, NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { env } from "./config/env";
 import keysRouter from "./routes/keys.routes";
@@ -16,6 +16,16 @@ export function createApp(): Express {
   app.use("/api/auth", authRouter);
   app.use("/api/keys", keysRouter);
   app.use("/api/messages", messagesRouter);
+
+  // Catches anything asyncHandler forwards (e.g. Prisma losing the DB
+  // connection) so a transient failure returns a normal error response
+  // instead of crashing the process via an unhandled rejection.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    console.error("Unhandled request error:", err);
+    if (res.headersSent) return;
+    res.status(503).json({ error: "Service temporarily unavailable. Please try again." });
+  });
 
   return app;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Socket } from "socket.io-client";
 import { clearSession, loadSession, Session } from "@/lib/auth";
@@ -17,11 +17,14 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import {
   appendMessage,
+  clearUnread,
   Conversation,
   getConversations,
   getMessages,
+  incrementUnread,
   LocalMessage,
   markViewOnceOpened,
+  toggleFavourite,
   updateMessageStatus,
   upsertConversation,
 } from "@/lib/localDb";
@@ -29,6 +32,8 @@ import { MessageBubble } from "@/components/MessageBubble";
 import { Avatar } from "@/components/Avatar";
 import { EmojiPicker } from "@/components/EmojiPicker";
 import { ProfileModal } from "@/components/ProfileModal";
+
+type ChatFilter = "all" | "unread" | "favourites" | "groups";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -38,8 +43,10 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activePeer, setActivePeer] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
-  const [newChatUsername, setNewChatUsername] = useState("");
-  const [newChatError, setNewChatError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
+  const [showMenu, setShowMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [viewOnceArmed, setViewOnceArmed] = useState(false);
@@ -51,6 +58,7 @@ export default function ChatPage() {
   const activePeerRef = useRef<Conversation | null>(null);
   const initRan = useRef(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     activePeerRef.current = activePeer;
@@ -90,6 +98,7 @@ export default function ChatPage() {
       for (const m of unread) {
         await sendReceipt(socket, m.id, "READ");
       }
+      await clearUnread(userId, peerId);
     },
     []
   );
@@ -148,7 +157,11 @@ export default function ChatPage() {
 
           if (activePeerRef.current?.peerId === msg.senderId) {
             setMessages(await getMessages(session.userId, msg.senderId));
+            await sendReceipt(socket, msg.id, "READ");
+          } else {
+            await incrementUnread(session.userId, msg.senderId);
           }
+          await refreshConversations(session.userId);
         } catch (err) {
           console.error(`Failed to process incoming message ${msg.id}:`, err);
         }
@@ -199,6 +212,7 @@ export default function ChatPage() {
             status: "DELIVERED",
             viewOnce: msg.viewOnce,
           });
+          await incrementUnread(session.userId, msg.senderId);
         } catch (err) {
           console.error(`Failed to process inbox message ${msg.id}, skipping:`, err);
         }
@@ -226,6 +240,17 @@ export default function ChatPage() {
     messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight });
   }, [messages]);
 
+  const visibleConversations = useMemo(() => {
+    let list = conversations;
+    if (chatFilter === "unread") list = list.filter((c) => (c.unreadCount ?? 0) > 0);
+    if (chatFilter === "favourites") list = list.filter((c) => c.favourite);
+    if (chatFilter === "groups") return [];
+
+    const query = searchQuery.trim().toLowerCase();
+    if (query) list = list.filter((c) => c.peerUsername.toLowerCase().includes(query));
+    return list;
+  }, [conversations, chatFilter, searchQuery]);
+
   async function handleSelectConversation(conv: Conversation) {
     if (!session) return;
     setActivePeer(conv);
@@ -233,26 +258,39 @@ export default function ChatPage() {
     setMessages(await getMessages(session.userId, conv.peerId));
     if (socketRef.current) {
       await markConversationRead(session.userId, conv.peerId, socketRef.current);
-      setMessages(await getMessages(session.userId, conv.peerId));
+      await refreshConversations(session.userId);
     }
   }
 
-  async function handleStartChat(e: React.FormEvent) {
+  async function handleToggleFavourite(e: React.MouseEvent, peerId: string) {
+    e.stopPropagation();
+    if (!session) return;
+    await toggleFavourite(session.userId, peerId);
+    await refreshConversations(session.userId);
+  }
+
+  async function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!session) return;
-    setNewChatError(null);
+    setSearchError(null);
 
-    const username = newChatUsername.trim();
+    const username = searchQuery.trim();
     if (!username) return;
+
+    const existingMatch = conversations.find((c) => c.peerUsername.toLowerCase() === username.toLowerCase());
+    if (existingMatch) {
+      await handleSelectConversation(existingMatch);
+      return;
+    }
+
     if (username === session.username) {
-      setNewChatError("That's you.");
+      setSearchError("That's you.");
       return;
     }
 
     try {
       const found = await lookupUsername(session.token, username);
-      const existing = conversations.find((c) => c.peerId === found.userId);
-      const conv: Conversation = existing ?? {
+      const conv: Conversation = {
         peerId: found.userId,
         peerUsername: found.username,
         peerAvatarUrl: found.avatarUrl,
@@ -262,9 +300,9 @@ export default function ChatPage() {
       await upsertConversation(session.userId, conv);
       await refreshConversations(session.userId);
       await handleSelectConversation(conv);
-      setNewChatUsername("");
+      setSearchQuery("");
     } catch (err) {
-      setNewChatError(err instanceof Error ? err.message : "User not found.");
+      setSearchError(err instanceof Error ? err.message : "User not found.");
     }
   }
 
@@ -299,7 +337,7 @@ export default function ChatPage() {
         viewOnce: wasViewOnce,
       });
       const preview = wasViewOnce ? "📷 View once photo" : text;
-      await upsertConversation(session.userId, { ...activePeer, lastMessage: preview, lastTimestamp: timestamp });
+      await upsertConversation(session.userId, { peerId: activePeer.peerId, lastMessage: preview, lastTimestamp: timestamp });
       await refreshConversations(session.userId);
       setMessages(await getMessages(session.userId, activePeer.peerId));
       setDraft("");
@@ -344,6 +382,13 @@ export default function ChatPage() {
     return <div className="loading-screen">{statusMessage}</div>;
   }
 
+  const filterTabs: { key: ChatFilter; label: string }[] = [
+    { key: "all", label: "All" },
+    { key: "unread", label: "Unread" },
+    { key: "favourites", label: "Favourites" },
+    { key: "groups", label: "Groups" },
+  ];
+
   return (
     <div className="chat-shell">
       <aside className="sidebar">
@@ -358,38 +403,95 @@ export default function ChatPage() {
               <span className="me-status">{session.statusText}</span>
             </span>
           </button>
-          <button className="logout-btn" onClick={handleLogout}>
-            Log out
-          </button>
         </div>
 
-        <form className="new-chat-row" onSubmit={handleStartChat}>
+        <div className="chats-toolbar">
+          <h2 className="chats-title">Chats</h2>
+          <div className="chats-toolbar-actions">
+            <div className="kebab-wrap">
+              <button className="composer-icon-btn" onClick={() => setShowMenu((v) => !v)} aria-label="Menu">
+                ⋮
+              </button>
+              {showMenu && (
+                <>
+                  <div className="menu-backdrop" onClick={() => setShowMenu(false)} />
+                  <div className="dropdown-menu">
+                    <button className="dropdown-item" onClick={handleLogout}>
+                      Log out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+            <button className="new-chat-fab" onClick={() => searchInputRef.current?.focus()} aria-label="New chat">
+              +
+            </button>
+          </div>
+        </div>
+
+        <form className="chat-search-row" onSubmit={handleSearchSubmit}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="10.5" cy="10.5" r="6.5" />
+            <path d="M20 20l-4.8-4.8" strokeLinecap="round" />
+          </svg>
           <input
-            placeholder="Start chat with username..."
-            value={newChatUsername}
-            onChange={(e) => setNewChatUsername(e.target.value)}
+            ref={searchInputRef}
+            placeholder="Search or start a new chat"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSearchError(null);
+            }}
           />
-          <button type="submit">Go</button>
         </form>
-        {newChatError && <div className="inline-error">{newChatError}</div>}
+        {searchError && <div className="inline-error">{searchError}</div>}
+
+        <div className="chat-filter-tabs">
+          {filterTabs.map((tab) => (
+            <button
+              key={tab.key}
+              className={`filter-tab ${chatFilter === tab.key ? "active" : ""}`}
+              onClick={() => setChatFilter(tab.key)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
         <div className="conversation-list">
-          {conversations.length === 0 && (
-            <div className="empty-conversations">No conversations yet. Start one above.</div>
-          )}
-          {conversations.map((conv) => (
-            <div
-              key={conv.peerId}
-              className={`conversation-item ${activePeer?.peerId === conv.peerId ? "active" : ""}`}
-              onClick={() => handleSelectConversation(conv)}
-            >
-              <Avatar name={conv.peerUsername} avatarUrl={conv.peerAvatarUrl} size={44} />
-              <span className="conversation-text">
-                <span className="peer">{conv.peerUsername}</span>
-                <span className="preview">{conv.lastMessage || "No messages yet"}</span>
-              </span>
+          {chatFilter === "groups" ? (
+            <div className="empty-conversations">Group chats aren't available yet.</div>
+          ) : visibleConversations.length === 0 ? (
+            <div className="empty-conversations">
+              {conversations.length === 0
+                ? "No conversations yet. Search a username above to start one."
+                : "No matches."}
             </div>
-          ))}
+          ) : (
+            visibleConversations.map((conv) => (
+              <div
+                key={conv.peerId}
+                className={`conversation-item ${activePeer?.peerId === conv.peerId ? "active" : ""}`}
+                onClick={() => handleSelectConversation(conv)}
+              >
+                <Avatar name={conv.peerUsername} avatarUrl={conv.peerAvatarUrl} size={44} />
+                <span className="conversation-text">
+                  <span className="peer">{conv.peerUsername}</span>
+                  <span className="preview">{conv.lastMessage || "No messages yet"}</span>
+                </span>
+                <span className="conversation-meta-col">
+                  <button
+                    className={`star-btn ${conv.favourite ? "starred" : ""}`}
+                    onClick={(e) => handleToggleFavourite(e, conv.peerId)}
+                    aria-label="Toggle favourite"
+                  >
+                    {conv.favourite ? "★" : "☆"}
+                  </button>
+                  {!!conv.unreadCount && <span className="unread-badge">{conv.unreadCount}</span>}
+                </span>
+              </div>
+            ))
+          )}
         </div>
       </aside>
 
