@@ -579,15 +579,19 @@ input {
 
 .msg-menu-trigger {
   position: absolute;
-  top: 0;
-  right: 2px;
-  background: none;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: rgba(0, 0, 0, 0.15);
   border: none;
   color: var(--text-dim);
-  font-size: 15px;
   line-height: 1;
-  padding: 3px 5px;
-  border-radius: 4px;
+  padding: 0;
+  border-radius: 50%;
   opacity: 0;
   cursor: pointer;
 }
