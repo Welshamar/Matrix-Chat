@@ -54,6 +54,7 @@ import { EmojiPicker } from "@/components/EmojiPicker";
 import { ProfileModal } from "@/components/ProfileModal";
 import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
+import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 import { FileAttachButton } from "@/components/FileAttachButton";
 
@@ -91,6 +92,7 @@ export default function ChatPage() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showNewGroupModal, setShowNewGroupModal] = useState(false);
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+  const [showContactDetails, setShowContactDetails] = useState(false);
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
 
   const clientRef = useRef<SignalClient | null>(null);
@@ -445,6 +447,7 @@ export default function ChatPage() {
     setActivePeer(conv);
     setShowEmojiPicker(false);
     setReplyingTo(null);
+    setShowContactDetails(false);
     setMessages(await getMessages(session.userId, conv.peerId));
     if (socketRef.current) {
       await markThreadRead(session.userId, conv.peerId, socketRef.current);
@@ -459,6 +462,7 @@ export default function ChatPage() {
     setActiveGroup(group);
     setShowEmojiPicker(false);
     setReplyingTo(null);
+    setShowContactDetails(false);
     setMessages(await getMessages(session.userId, groupThreadKey(group.groupId)));
     if (socketRef.current) {
       await markThreadRead(session.userId, groupThreadKey(group.groupId), socketRef.current);
@@ -475,6 +479,15 @@ export default function ChatPage() {
       const conv = conversations.find((c) => c.peerId === t.key);
       if (conv) handleSelectConversation(conv);
     }
+  }
+
+  // On narrow viewports the sidebar and the open thread share one screen's
+  // worth of space (see the `has-active-thread` media query), so there has
+  // to be a way back to the list besides picking another conversation.
+  function handleBackToList() {
+    setActivePeer(null);
+    setActiveGroup(null);
+    setShowContactDetails(false);
   }
 
   async function handleToggleFavourite(e: React.MouseEvent, t: ThreadView) {
@@ -792,7 +805,7 @@ export default function ChatPage() {
   const activeKey = activeGroup?.groupId ?? activePeer?.peerId ?? null;
 
   return (
-    <div className="chat-shell">
+    <div className={`chat-shell ${activePeer || activeGroup ? "has-active-thread" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-header">
           <button className="me" onClick={() => setShowProfileModal(true)}>
@@ -914,22 +927,39 @@ export default function ChatPage() {
           <div className="chat-empty-state">Select a conversation or start a new one to begin an encrypted chat.</div>
         ) : (
           <>
-            <div
-              className="chat-header"
-              onClick={() => activeGroup && setShowGroupInfoModal(true)}
-              style={{ cursor: activeGroup ? "pointer" : "default" }}
-            >
-              <Avatar
-                name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
-                avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
-                size={38}
-              />
-              <span className="chat-header-text">
-                <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
-                <span className="lock">
-                  {activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+          <div className="chat-thread-col">
+            <div className="chat-header">
+              <button type="button" className="chat-back-btn" onClick={handleBackToList} aria-label="Back to chats">
+                ←
+              </button>
+              <div className="chat-header-clickable" onClick={() => setShowContactDetails(true)}>
+                <Avatar
+                  name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
+                  avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
+                  size={38}
+                />
+                <span className="chat-header-text">
+                  <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
+                  <span className="lock">
+                    {activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+                  </span>
                 </span>
-              </span>
+              </div>
+              <div className="chat-header-actions">
+                <button
+                  type="button"
+                  className={`chat-info-btn ${showContactDetails ? "active" : ""}`}
+                  onClick={() => setShowContactDetails((v) => !v)}
+                  aria-label="Contact details"
+                  title="Contact details"
+                >
+                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 11v5.5" strokeLinecap="round" />
+                    <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <div className="message-list" ref={messageListRef}>
               {messages.map((m) => (
@@ -1008,6 +1038,24 @@ export default function ChatPage() {
                 )}
               </div>
             </form>
+          </div>
+          {showContactDetails && (
+            <ContactDetailsPanel
+              name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
+              avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
+              status={activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+              messages={messages}
+              onManageGroup={
+                activeGroup
+                  ? () => {
+                      setShowContactDetails(false);
+                      setShowGroupInfoModal(true);
+                    }
+                  : undefined
+              }
+              onClose={() => setShowContactDetails(false)}
+            />
+          )}
           </>
         )}
       </main>
