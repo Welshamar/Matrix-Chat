@@ -63,11 +63,56 @@ export interface InboxEnvelope {
   ciphertext: string;
   signalMessageType: number;
   viewOnce: boolean;
+  kind: "TEXT" | "VOICE";
+  groupId: string | null;
   timestamp: string;
 }
 
 export function fetchInbox(token: string): Promise<InboxEnvelope[]> {
   return authedRequest("/api/messages/inbox", token, { method: "GET" });
+}
+
+export type GroupRole = "ADMIN" | "MEMBER";
+
+export interface GroupMemberDTO {
+  userId: string;
+  username: string;
+  avatarUrl: string | null;
+  role: GroupRole;
+}
+
+export interface GroupDTO {
+  groupId: string;
+  name: string;
+  avatarUrl: string | null;
+  members: GroupMemberDTO[];
+}
+
+export function createGroup(token: string, name: string, memberUserIds: string[]): Promise<GroupDTO> {
+  return authedRequest("/api/groups", token, { method: "POST", body: JSON.stringify({ name, memberUserIds }) });
+}
+
+export function listGroups(token: string): Promise<GroupDTO[]> {
+  return authedRequest("/api/groups", token, { method: "GET" });
+}
+
+export function getGroup(token: string, groupId: string): Promise<GroupDTO> {
+  return authedRequest(`/api/groups/${groupId}`, token, { method: "GET" });
+}
+
+export function addGroupMember(token: string, groupId: string, userId: string): Promise<GroupDTO> {
+  return authedRequest(`/api/groups/${groupId}/members`, token, { method: "POST", body: JSON.stringify({ userId }) });
+}
+
+export function removeGroupMember(token: string, groupId: string, userId: string): Promise<void> {
+  return authedRequest(`/api/groups/${groupId}/members/${userId}`, token, { method: "DELETE" });
+}
+
+export function updateGroupMemberRole(token: string, groupId: string, userId: string, role: GroupRole): Promise<void> {
+  return authedRequest(`/api/groups/${groupId}/members/${userId}`, token, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
 }
 
 export { API_URL };

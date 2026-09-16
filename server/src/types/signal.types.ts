@@ -31,6 +31,12 @@ export interface SignalMessagePayload {
   signalMessageType: number; // 3 = PreKeyWhisperMessage, 1 = WhisperMessage
   clientMessageId?: string;
   viewOnce?: boolean;
+  kind?: "TEXT" | "VOICE";
+  // Present for a group send: this row is one member's individual
+  // pairwise-encrypted copy (see the Message model for why there's no
+  // separate group encryption scheme), tagged so recipients can file it
+  // into the right group thread.
+  groupId?: string;
 }
 
 export interface SignalReceiptPayload {

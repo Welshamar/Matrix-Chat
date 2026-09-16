@@ -4,6 +4,7 @@ import { env } from "./config/env";
 import keysRouter from "./routes/keys.routes";
 import authRouter from "./routes/auth.routes";
 import messagesRouter from "./routes/messages.routes";
+import groupsRouter from "./routes/groups.routes";
 
 export function createApp(): Express {
   const app = express();
@@ -16,6 +17,7 @@ export function createApp(): Express {
   app.use("/api/auth", authRouter);
   app.use("/api/keys", keysRouter);
   app.use("/api/messages", messagesRouter);
+  app.use("/api/groups", groupsRouter);
 
   // Catches anything asyncHandler forwards (e.g. Prisma losing the DB
   // connection) so a transient failure returns a normal error response

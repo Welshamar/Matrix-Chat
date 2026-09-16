@@ -65,6 +65,19 @@ export function registerSignalGateway(io: Server): void {
         }
 
         try {
+          // A client can only tag a send with a groupId it's actually a
+          // member of — otherwise it's silently treated as a plain 1:1
+          // send, so a bad client can't spoof messages into someone
+          // else's group thread (it still can't read anything either
+          // way; this is about thread integrity, not confidentiality).
+          let groupId: string | undefined;
+          if (payload.groupId) {
+            const membership = await prisma.groupMember.findUnique({
+              where: { groupId_userId: { groupId: payload.groupId, userId } },
+            });
+            if (membership) groupId = payload.groupId;
+          }
+
           // `payload.ciphertext` is an opaque Double Ratchet blob: stored
           // and relayed byte-for-byte, never parsed or decrypted here.
           const message = await prisma.message.create({
@@ -74,6 +87,8 @@ export function registerSignalGateway(io: Server): void {
               ciphertext: payload.ciphertext,
               signalMessageType: payload.signalMessageType,
               viewOnce: payload.viewOnce ?? false,
+              kind: payload.kind ?? "TEXT",
+              groupId,
             },
           });
 
@@ -83,6 +98,8 @@ export function registerSignalGateway(io: Server): void {
             ciphertext: message.ciphertext,
             signalMessageType: message.signalMessageType,
             viewOnce: message.viewOnce,
+            kind: message.kind,
+            groupId: message.groupId,
             timestamp: message.timestamp,
           });
 

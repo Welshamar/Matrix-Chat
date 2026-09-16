@@ -4,7 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Socket } from "socket.io-client";
 import { clearSession, loadSession, Session } from "@/lib/auth";
-import { fetchInbox, lookupUsername, resolveUserId, updateProfile } from "@/lib/api";
+import {
+  addGroupMember,
+  createGroup as createGroupApi,
+  fetchInbox,
+  getGroup,
+  listGroups,
+  lookupUsername,
+  removeGroupMember,
+  resolveUserId,
+  updateGroupMemberRole,
+  updateProfile,
+} from "@/lib/api";
 import {
   connectSignalSocket,
   InboundSignalMessage,
@@ -17,23 +28,44 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import {
   appendMessage,
+  clearGroupUnread,
   clearUnread,
   Conversation,
   getConversations,
+  getGroups,
   getMessages,
+  groupThreadKey,
+  incrementGroupUnread,
   incrementUnread,
+  LocalGroup,
   LocalMessage,
   markViewOnceOpened,
   toggleFavourite,
+  toggleGroupFavourite,
   updateMessageStatus,
   upsertConversation,
+  upsertGroup,
 } from "@/lib/localDb";
 import { MessageBubble } from "@/components/MessageBubble";
 import { Avatar } from "@/components/Avatar";
 import { EmojiPicker } from "@/components/EmojiPicker";
 import { ProfileModal } from "@/components/ProfileModal";
+import { NewGroupModal } from "@/components/NewGroupModal";
+import { GroupInfoModal } from "@/components/GroupInfoModal";
+import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 
 type ChatFilter = "all" | "unread" | "favourites" | "groups";
+
+interface ThreadView {
+  key: string;
+  isGroup: boolean;
+  name: string;
+  avatarUrl?: string | null;
+  lastMessage: string;
+  lastTimestamp: string;
+  favourite?: boolean;
+  unreadCount?: number;
+}
 
 export default function ChatPage() {
   const router = useRouter();
@@ -41,7 +73,9 @@ export default function ChatPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>("Setting up encryption keys...");
   const [connected, setConnected] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [groups, setGroups] = useState<LocalGroup[]>([]);
   const [activePeer, setActivePeer] = useState<Conversation | null>(null);
+  const [activeGroup, setActiveGroup] = useState<LocalGroup | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -52,10 +86,14 @@ export default function ChatPage() {
   const [viewOnceArmed, setViewOnceArmed] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showNewGroupModal, setShowNewGroupModal] = useState(false);
+  const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const activePeerRef = useRef<Conversation | null>(null);
+  const activeGroupRef = useRef<LocalGroup | null>(null);
+  const groupsRef = useRef<LocalGroup[]>([]);
   const initRan = useRef(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -63,9 +101,19 @@ export default function ChatPage() {
   useEffect(() => {
     activePeerRef.current = activePeer;
   }, [activePeer]);
+  useEffect(() => {
+    activeGroupRef.current = activeGroup;
+  }, [activeGroup]);
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
 
   const refreshConversations = useCallback(async (userId: string) => {
     setConversations(await getConversations(userId));
+  }, []);
+
+  const refreshGroups = useCallback(async (userId: string) => {
+    setGroups(await getGroups(userId));
   }, []);
 
   // Resolves a username + avatar for a peer we may not have met before,
@@ -89,19 +137,38 @@ export default function ChatPage() {
     [refreshConversations]
   );
 
-  // Marks any unread incoming messages in `peerId`'s history as READ and
-  // tells the sender, so their bubble turns into a blue double-tick.
-  const markConversationRead = useCallback(
-    async (userId: string, peerId: string, socket: Socket) => {
-      const history = await getMessages(userId, peerId);
-      const unread = history.filter((m) => m.direction === "in" && m.status !== "READ");
-      for (const m of unread) {
-        await sendReceipt(socket, m.id, "READ");
+  // Fetches (and caches) a group's roster the first time we see a message
+  // for it — happens when someone adds us, or on our very first login.
+  const ensureGroup = useCallback(
+    async (userId: string, token: string, groupId: string, lastMessage: string, lastTimestamp: string) => {
+      let group = groupsRef.current.find((g) => g.groupId === groupId);
+      if (!group) {
+        const fetched = await getGroup(token, groupId);
+        group = {
+          groupId: fetched.groupId,
+          name: fetched.name,
+          avatarUrl: fetched.avatarUrl,
+          members: fetched.members,
+          lastMessage,
+          lastTimestamp,
+        };
       }
-      await clearUnread(userId, peerId);
+      await upsertGroup(userId, { ...group, lastMessage, lastTimestamp });
+      await refreshGroups(userId);
+      return group;
     },
-    []
+    [refreshGroups]
   );
+
+  // Marks any unread incoming messages in a thread as READ and tells the
+  // sender(s), so their bubble turns into a blue double-tick.
+  const markThreadRead = useCallback(async (userId: string, threadKey: string, socket: Socket) => {
+    const history = await getMessages(userId, threadKey);
+    const unread = history.filter((m) => m.direction === "in" && m.status !== "READ");
+    for (const m of unread) {
+      await sendReceipt(socket, m.id, "READ");
+    }
+  }, []);
 
   useEffect(() => {
     const existing = loadSession();
@@ -144,24 +211,60 @@ export default function ChatPage() {
             signalMessageType: msg.signalMessageType,
           });
 
-          await ensureConversation(session.userId, session.token, msg.senderId, msg.viewOnce ? "📷 View once photo" : plaintext, msg.timestamp);
+          if (msg.groupId) {
+            const group = await ensureGroup(
+              session.userId,
+              session.token,
+              msg.groupId,
+              summarize(msg.kind, msg.viewOnce, plaintext),
+              msg.timestamp
+            );
+            const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
+            await appendMessage(session.userId, groupThreadKey(msg.groupId), {
+              id: msg.id,
+              direction: "in",
+              body: plaintext,
+              timestamp: msg.timestamp,
+              status: "DELIVERED",
+              viewOnce: msg.viewOnce,
+              kind: msg.kind,
+              senderId: msg.senderId,
+              senderUsername,
+            });
 
-          await appendMessage(session.userId, msg.senderId, {
-            id: msg.id,
-            direction: "in",
-            body: plaintext,
-            timestamp: msg.timestamp,
-            status: "DELIVERED",
-            viewOnce: msg.viewOnce,
-          });
-
-          if (activePeerRef.current?.peerId === msg.senderId) {
-            setMessages(await getMessages(session.userId, msg.senderId));
-            await sendReceipt(socket, msg.id, "READ");
+            if (activeGroupRef.current?.groupId === msg.groupId) {
+              setMessages(await getMessages(session.userId, groupThreadKey(msg.groupId)));
+              await sendReceipt(socket, msg.id, "READ");
+            } else {
+              await incrementGroupUnread(session.userId, msg.groupId);
+            }
+            await refreshGroups(session.userId);
           } else {
-            await incrementUnread(session.userId, msg.senderId);
+            await ensureConversation(
+              session.userId,
+              session.token,
+              msg.senderId,
+              summarize(msg.kind, msg.viewOnce, plaintext),
+              msg.timestamp
+            );
+            await appendMessage(session.userId, msg.senderId, {
+              id: msg.id,
+              direction: "in",
+              body: plaintext,
+              timestamp: msg.timestamp,
+              status: "DELIVERED",
+              viewOnce: msg.viewOnce,
+              kind: msg.kind,
+            });
+
+            if (activePeerRef.current?.peerId === msg.senderId) {
+              setMessages(await getMessages(session.userId, msg.senderId));
+              await sendReceipt(socket, msg.id, "READ");
+            } else {
+              await incrementUnread(session.userId, msg.senderId);
+            }
+            await refreshConversations(session.userId);
           }
-          await refreshConversations(session.userId);
         } catch (err) {
           console.error(`Failed to process incoming message ${msg.id}:`, err);
         }
@@ -170,6 +273,8 @@ export default function ChatPage() {
 
       socket.on("signal:receipt", async (evt: SignalReceiptEvent) => {
         try {
+          // We don't know here whether `evt.from` is a 1:1 peer or a group
+          // member — try both; only one will actually hold this message id.
           await updateMessageStatus(session.userId, evt.from, evt.messageId, evt.status);
           if (activePeerRef.current?.peerId === evt.from) {
             setMessages(await getMessages(session.userId, evt.from));
@@ -192,6 +297,22 @@ export default function ChatPage() {
         }
       });
 
+      // Sync our group roster from the server (covers being added to a
+      // group, or a role change, since we last logged in).
+      try {
+        const serverGroups = await listGroups(session.token);
+        for (const g of serverGroups) {
+          await upsertGroup(session.userId, {
+            groupId: g.groupId,
+            name: g.name,
+            avatarUrl: g.avatarUrl,
+            members: g.members,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to sync groups:", err);
+      }
+
       // Catch up on anything sent while we were offline. Each message is
       // handled independently — one bad/undecryptable message (e.g. a key
       // already consumed by an earlier interrupted attempt) must not take
@@ -203,16 +324,46 @@ export default function ChatPage() {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
-          await ensureConversation(session.userId, session.token, msg.senderId, msg.viewOnce ? "📷 View once photo" : plaintext, msg.timestamp);
-          await appendMessage(session.userId, msg.senderId, {
-            id: msg.id,
-            direction: "in",
-            body: plaintext,
-            timestamp: msg.timestamp,
-            status: "DELIVERED",
-            viewOnce: msg.viewOnce,
-          });
-          await incrementUnread(session.userId, msg.senderId);
+          if (msg.groupId) {
+            const group = await ensureGroup(
+              session.userId,
+              session.token,
+              msg.groupId,
+              summarize(msg.kind, msg.viewOnce, plaintext),
+              msg.timestamp
+            );
+            const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
+            await appendMessage(session.userId, groupThreadKey(msg.groupId), {
+              id: msg.id,
+              direction: "in",
+              body: plaintext,
+              timestamp: msg.timestamp,
+              status: "DELIVERED",
+              viewOnce: msg.viewOnce,
+              kind: msg.kind,
+              senderId: msg.senderId,
+              senderUsername,
+            });
+            await incrementGroupUnread(session.userId, msg.groupId);
+          } else {
+            await ensureConversation(
+              session.userId,
+              session.token,
+              msg.senderId,
+              summarize(msg.kind, msg.viewOnce, plaintext),
+              msg.timestamp
+            );
+            await appendMessage(session.userId, msg.senderId, {
+              id: msg.id,
+              direction: "in",
+              body: plaintext,
+              timestamp: msg.timestamp,
+              status: "DELIVERED",
+              viewOnce: msg.viewOnce,
+              kind: msg.kind,
+            });
+            await incrementUnread(session.userId, msg.senderId);
+          }
         } catch (err) {
           console.error(`Failed to process inbox message ${msg.id}, skipping:`, err);
         }
@@ -222,6 +373,7 @@ export default function ChatPage() {
       }
 
       await refreshConversations(session.userId);
+      await refreshGroups(session.userId);
     }
 
     init().catch((err) => {
@@ -240,33 +392,84 @@ export default function ChatPage() {
     messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight });
   }, [messages]);
 
-  const visibleConversations = useMemo(() => {
-    let list = conversations;
-    if (chatFilter === "unread") list = list.filter((c) => (c.unreadCount ?? 0) > 0);
-    if (chatFilter === "favourites") list = list.filter((c) => c.favourite);
-    if (chatFilter === "groups") return [];
+  const threadViews = useMemo<ThreadView[]>(() => {
+    const convViews: ThreadView[] = conversations.map((c) => ({
+      key: c.peerId,
+      isGroup: false,
+      name: c.peerUsername,
+      avatarUrl: c.peerAvatarUrl,
+      lastMessage: c.lastMessage,
+      lastTimestamp: c.lastTimestamp,
+      favourite: c.favourite,
+      unreadCount: c.unreadCount,
+    }));
+    const groupViews: ThreadView[] = groups.map((g) => ({
+      key: g.groupId,
+      isGroup: true,
+      name: g.name,
+      avatarUrl: g.avatarUrl,
+      lastMessage: g.lastMessage,
+      lastTimestamp: g.lastTimestamp,
+      favourite: g.favourite,
+      unreadCount: g.unreadCount,
+    }));
+
+    let combined = chatFilter === "groups" ? groupViews : [...convViews, ...groupViews];
+    if (chatFilter === "unread") combined = combined.filter((t) => (t.unreadCount ?? 0) > 0);
+    if (chatFilter === "favourites") combined = combined.filter((t) => t.favourite);
 
     const query = searchQuery.trim().toLowerCase();
-    if (query) list = list.filter((c) => c.peerUsername.toLowerCase().includes(query));
-    return list;
-  }, [conversations, chatFilter, searchQuery]);
+    if (query) combined = combined.filter((t) => t.name.toLowerCase().includes(query));
+
+    return combined.sort((a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime());
+  }, [conversations, groups, chatFilter, searchQuery]);
 
   async function handleSelectConversation(conv: Conversation) {
     if (!session) return;
+    setActiveGroup(null);
     setActivePeer(conv);
     setShowEmojiPicker(false);
     setMessages(await getMessages(session.userId, conv.peerId));
     if (socketRef.current) {
-      await markConversationRead(session.userId, conv.peerId, socketRef.current);
+      await markThreadRead(session.userId, conv.peerId, socketRef.current);
+      await clearUnread(session.userId, conv.peerId);
       await refreshConversations(session.userId);
     }
   }
 
-  async function handleToggleFavourite(e: React.MouseEvent, peerId: string) {
+  async function handleSelectGroup(group: LocalGroup) {
+    if (!session) return;
+    setActivePeer(null);
+    setActiveGroup(group);
+    setShowEmojiPicker(false);
+    setMessages(await getMessages(session.userId, groupThreadKey(group.groupId)));
+    if (socketRef.current) {
+      await markThreadRead(session.userId, groupThreadKey(group.groupId), socketRef.current);
+      await clearGroupUnread(session.userId, group.groupId);
+      await refreshGroups(session.userId);
+    }
+  }
+
+  function handleSelectThread(t: ThreadView) {
+    if (t.isGroup) {
+      const group = groups.find((g) => g.groupId === t.key);
+      if (group) handleSelectGroup(group);
+    } else {
+      const conv = conversations.find((c) => c.peerId === t.key);
+      if (conv) handleSelectConversation(conv);
+    }
+  }
+
+  async function handleToggleFavourite(e: React.MouseEvent, t: ThreadView) {
     e.stopPropagation();
     if (!session) return;
-    await toggleFavourite(session.userId, peerId);
-    await refreshConversations(session.userId);
+    if (t.isGroup) {
+      await toggleGroupFavourite(session.userId, t.key);
+      await refreshGroups(session.userId);
+    } else {
+      await toggleFavourite(session.userId, t.key);
+      await refreshConversations(session.userId);
+    }
   }
 
   async function handleSearchSubmit(e: React.FormEvent) {
@@ -306,42 +509,99 @@ export default function ChatPage() {
     }
   }
 
+  async function sendToActiveThread(body: string, kind: "TEXT" | "VOICE") {
+    if (!session || !clientRef.current || !socketRef.current) return;
+    const wasViewOnce = viewOnceArmed && kind === "TEXT";
+
+    if (activeGroup) {
+      const others = activeGroup.members.filter((m) => m.userId !== session.userId);
+      let localId: string | null = null;
+      for (const member of others) {
+        const envelope = await clientRef.current.encryptMessage(member.userId, body);
+        const ack = await sendSignalMessage(socketRef.current, {
+          recipientId: member.userId,
+          ciphertext: envelope.ciphertext,
+          signalMessageType: envelope.signalMessageType,
+          kind,
+          groupId: activeGroup.groupId,
+        });
+        if (ack.ok && !localId) localId = ack.messageId ?? null;
+      }
+      const timestamp = new Date().toISOString();
+      await appendMessage(session.userId, groupThreadKey(activeGroup.groupId), {
+        id: localId ?? crypto.randomUUID(),
+        direction: "out",
+        body,
+        timestamp,
+        status: "SENT",
+        kind,
+        senderId: session.userId,
+        senderUsername: session.username,
+      });
+      await upsertGroup(session.userId, {
+        groupId: activeGroup.groupId,
+        lastMessage: summarize(kind, false, body),
+        lastTimestamp: timestamp,
+      });
+      await refreshGroups(session.userId);
+      setMessages(await getMessages(session.userId, groupThreadKey(activeGroup.groupId)));
+      return;
+    }
+
+    if (!activePeer) return;
+    const envelope = await clientRef.current.encryptMessage(activePeer.peerId, body);
+    const ack = await sendSignalMessage(socketRef.current, {
+      recipientId: activePeer.peerId,
+      ciphertext: envelope.ciphertext,
+      signalMessageType: envelope.signalMessageType,
+      viewOnce: wasViewOnce,
+      kind,
+    });
+
+    if (!ack.ok || !ack.messageId) {
+      throw new Error(ack.error ?? "Failed to send message.");
+    }
+
+    const timestamp = new Date().toISOString();
+    await appendMessage(session.userId, activePeer.peerId, {
+      id: ack.messageId,
+      direction: "out",
+      body,
+      timestamp,
+      status: "SENT",
+      viewOnce: wasViewOnce,
+      kind,
+    });
+    await upsertConversation(session.userId, {
+      peerId: activePeer.peerId,
+      lastMessage: summarize(kind, wasViewOnce, body),
+      lastTimestamp: timestamp,
+    });
+    await refreshConversations(session.userId);
+    setMessages(await getMessages(session.userId, activePeer.peerId));
+  }
+
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const text = draft.trim();
-    if (!text || !session || !activePeer || !clientRef.current || !socketRef.current) return;
+    if (!text || sending) return;
 
     setSending(true);
-    const wasViewOnce = viewOnceArmed;
     try {
-      const envelope = await clientRef.current.encryptMessage(activePeer.peerId, text);
-      const ack = await sendSignalMessage(
-        socketRef.current,
-        activePeer.peerId,
-        envelope.ciphertext,
-        envelope.signalMessageType,
-        wasViewOnce
-      );
-
-      if (!ack.ok || !ack.messageId) {
-        throw new Error(ack.error ?? "Failed to send message.");
-      }
-
-      const timestamp = new Date().toISOString();
-      await appendMessage(session.userId, activePeer.peerId, {
-        id: ack.messageId,
-        direction: "out",
-        body: text,
-        timestamp,
-        status: "SENT",
-        viewOnce: wasViewOnce,
-      });
-      const preview = wasViewOnce ? "📷 View once photo" : text;
-      await upsertConversation(session.userId, { peerId: activePeer.peerId, lastMessage: preview, lastTimestamp: timestamp });
-      await refreshConversations(session.userId);
-      setMessages(await getMessages(session.userId, activePeer.peerId));
+      await sendToActiveThread(text, "TEXT");
       setDraft("");
       setViewOnceArmed(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleVoiceRecorded(dataUrl: string) {
+    setSending(true);
+    try {
+      await sendToActiveThread(dataUrl, "VOICE");
     } catch (err) {
       console.error(err);
     } finally {
@@ -353,6 +613,61 @@ export default function ChatPage() {
     if (!session || !activePeer || !socketRef.current) return;
     await markViewOnceOpened(session.userId, activePeer.peerId, messageId);
     await sendViewed(socketRef.current, messageId);
+  }
+
+  async function handleCreateGroup(name: string, memberUserIds: string[]) {
+    if (!session) return;
+    const created = await createGroupApi(session.token, name, memberUserIds);
+    const group: LocalGroup = {
+      groupId: created.groupId,
+      name: created.name,
+      avatarUrl: created.avatarUrl,
+      members: created.members,
+      lastMessage: "",
+      lastTimestamp: new Date().toISOString(),
+    };
+    await upsertGroup(session.userId, group);
+    await refreshGroups(session.userId);
+    await handleSelectGroup(group);
+  }
+
+  async function handleAddGroupMember(userId: string) {
+    if (!session || !activeGroup) return;
+    const updated = await addGroupMember(session.token, activeGroup.groupId, userId);
+    const group: LocalGroup = { ...activeGroup, members: updated.members };
+    setActiveGroup(group);
+    await upsertGroup(session.userId, group);
+    await refreshGroups(session.userId);
+  }
+
+  async function handleRemoveGroupMember(userId: string) {
+    if (!session || !activeGroup) return;
+    await removeGroupMember(session.token, activeGroup.groupId, userId);
+    const group: LocalGroup = { ...activeGroup, members: activeGroup.members.filter((m) => m.userId !== userId) };
+    setActiveGroup(group);
+    await upsertGroup(session.userId, group);
+    await refreshGroups(session.userId);
+  }
+
+  async function handleSetMemberRole(userId: string, role: "ADMIN" | "MEMBER") {
+    if (!session || !activeGroup) return;
+    await updateGroupMemberRole(session.token, activeGroup.groupId, userId, role);
+    const group: LocalGroup = {
+      ...activeGroup,
+      members: activeGroup.members.map((m) => (m.userId === userId ? { ...m, role } : m)),
+    };
+    setActiveGroup(group);
+    await upsertGroup(session.userId, group);
+    await refreshGroups(session.userId);
+  }
+
+  async function handleLeaveGroup() {
+    if (!session || !activeGroup) return;
+    await removeGroupMember(session.token, activeGroup.groupId, session.userId);
+    setShowGroupInfoModal(false);
+    setActiveGroup(null);
+    setMessages([]);
+    await refreshGroups(session.userId);
   }
 
   async function handleSaveProfile(patch: { avatarUrl?: string | null; statusText?: string | null }) {
@@ -389,6 +704,8 @@ export default function ChatPage() {
     { key: "groups", label: "Groups" },
   ];
 
+  const activeKey = activeGroup?.groupId ?? activePeer?.peerId ?? null;
+
   return (
     <div className="chat-shell">
       <aside className="sidebar">
@@ -416,6 +733,15 @@ export default function ChatPage() {
                 <>
                   <div className="menu-backdrop" onClick={() => setShowMenu(false)} />
                   <div className="dropdown-menu">
+                    <button
+                      className="dropdown-item"
+                      onClick={() => {
+                        setShowMenu(false);
+                        setShowNewGroupModal(true);
+                      }}
+                    >
+                      New group
+                    </button>
                     <button className="dropdown-item" onClick={handleLogout}>
                       Log out
                     </button>
@@ -459,35 +785,38 @@ export default function ChatPage() {
         </div>
 
         <div className="conversation-list">
-          {chatFilter === "groups" ? (
-            <div className="empty-conversations">Group chats aren't available yet.</div>
-          ) : visibleConversations.length === 0 ? (
+          {threadViews.length === 0 ? (
             <div className="empty-conversations">
-              {conversations.length === 0
+              {chatFilter === "groups"
+                ? "No groups yet. Use the menu to create one."
+                : conversations.length === 0 && groups.length === 0
                 ? "No conversations yet. Search a username above to start one."
                 : "No matches."}
             </div>
           ) : (
-            visibleConversations.map((conv) => (
+            threadViews.map((t) => (
               <div
-                key={conv.peerId}
-                className={`conversation-item ${activePeer?.peerId === conv.peerId ? "active" : ""}`}
-                onClick={() => handleSelectConversation(conv)}
+                key={t.key}
+                className={`conversation-item ${activeKey === t.key ? "active" : ""}`}
+                onClick={() => handleSelectThread(t)}
               >
-                <Avatar name={conv.peerUsername} avatarUrl={conv.peerAvatarUrl} size={44} />
+                <Avatar name={t.name} avatarUrl={t.avatarUrl} size={44} />
                 <span className="conversation-text">
-                  <span className="peer">{conv.peerUsername}</span>
-                  <span className="preview">{conv.lastMessage || "No messages yet"}</span>
+                  <span className="peer">
+                    {t.isGroup && "👥 "}
+                    {t.name}
+                  </span>
+                  <span className="preview">{t.lastMessage || "No messages yet"}</span>
                 </span>
                 <span className="conversation-meta-col">
                   <button
-                    className={`star-btn ${conv.favourite ? "starred" : ""}`}
-                    onClick={(e) => handleToggleFavourite(e, conv.peerId)}
+                    className={`star-btn ${t.favourite ? "starred" : ""}`}
+                    onClick={(e) => handleToggleFavourite(e, t)}
                     aria-label="Toggle favourite"
                   >
-                    {conv.favourite ? "★" : "☆"}
+                    {t.favourite ? "★" : "☆"}
                   </button>
-                  {!!conv.unreadCount && <span className="unread-badge">{conv.unreadCount}</span>}
+                  {!!t.unreadCount && <span className="unread-badge">{t.unreadCount}</span>}
                 </span>
               </div>
             ))
@@ -496,20 +825,30 @@ export default function ChatPage() {
       </aside>
 
       <main className="chat-main">
-        {!activePeer ? (
+        {!activePeer && !activeGroup ? (
           <div className="chat-empty-state">Select a conversation or start a new one to begin an encrypted chat.</div>
         ) : (
           <>
-            <div className="chat-header">
-              <Avatar name={activePeer.peerUsername} avatarUrl={activePeer.peerAvatarUrl} size={38} />
+            <div
+              className="chat-header"
+              onClick={() => activeGroup && setShowGroupInfoModal(true)}
+              style={{ cursor: activeGroup ? "pointer" : "default" }}
+            >
+              <Avatar
+                name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
+                avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
+                size={38}
+              />
               <span className="chat-header-text">
-                <span className="chat-header-name">{activePeer.peerUsername}</span>
-                <span className="lock">🔒 End-to-end encrypted</span>
+                <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
+                <span className="lock">
+                  {activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+                </span>
               </span>
             </div>
             <div className="message-list" ref={messageListRef}>
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} onOpenViewOnce={handleOpenViewOnce} />
+                <MessageBubble key={m.id} message={m} onOpenViewOnce={handleOpenViewOnce} showSender={!!activeGroup} />
               ))}
             </div>
             <form className="composer" onSubmit={handleSend}>
@@ -537,18 +876,24 @@ export default function ChatPage() {
                   disabled={sending}
                 />
               </div>
-              <button
-                type="button"
-                className={`composer-icon-btn ${viewOnceArmed ? "armed" : ""}`}
-                onClick={() => setViewOnceArmed((v) => !v)}
-                aria-label="Toggle view-once"
-                title="Send as view-once"
-              >
-                {viewOnceArmed ? "1️⃣" : "👁"}
-              </button>
-              <button type="submit" className="composer-send-btn" disabled={sending || !draft.trim()}>
-                ➤
-              </button>
+              {!activeGroup && (
+                <button
+                  type="button"
+                  className={`composer-icon-btn ${viewOnceArmed ? "armed" : ""}`}
+                  onClick={() => setViewOnceArmed((v) => !v)}
+                  aria-label="Toggle view-once"
+                  title="Send as view-once"
+                >
+                  {viewOnceArmed ? "1️⃣" : "👁"}
+                </button>
+              )}
+              {draft.trim() ? (
+                <button type="submit" className="composer-send-btn" disabled={sending}>
+                  ➤
+                </button>
+              ) : (
+                <VoiceRecorderButton onRecorded={handleVoiceRecorded} disabled={sending} />
+              )}
             </form>
           </>
         )}
@@ -563,6 +908,34 @@ export default function ChatPage() {
           onClose={() => setShowProfileModal(false)}
         />
       )}
+
+      {showNewGroupModal && (
+        <NewGroupModal
+          token={session.token}
+          myUsername={session.username}
+          onCreate={handleCreateGroup}
+          onClose={() => setShowNewGroupModal(false)}
+        />
+      )}
+
+      {showGroupInfoModal && activeGroup && (
+        <GroupInfoModal
+          group={activeGroup}
+          myUserId={session.userId}
+          token={session.token}
+          onAddMember={handleAddGroupMember}
+          onRemoveMember={handleRemoveGroupMember}
+          onSetRole={handleSetMemberRole}
+          onLeave={handleLeaveGroup}
+          onClose={() => setShowGroupInfoModal(false)}
+        />
+      )}
     </div>
   );
+}
+
+function summarize(kind: "TEXT" | "VOICE", viewOnce: boolean | undefined, plaintext: string): string {
+  if (kind === "VOICE") return "🎤 Voice message";
+  if (viewOnce) return "📷 View once photo";
+  return plaintext;
 }

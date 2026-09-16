@@ -24,6 +24,8 @@ export async function fetchInbox(req: Request, res: Response): Promise<void> {
         ciphertext: m.ciphertext as string,
         signalMessageType: m.signalMessageType,
         viewOnce: m.viewOnce,
+        kind: m.kind,
+        groupId: m.groupId,
         timestamp: m.timestamp,
       }))
   );

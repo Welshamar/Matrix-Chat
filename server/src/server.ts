@@ -19,6 +19,7 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: { origin: env.CORS_ORIGIN },
+  maxHttpBufferSize: 8 * 1024 * 1024, // headroom for base64 voice-note ciphertext (default 1MB is too tight)
 });
 
 registerSignalGateway(io);

@@ -831,6 +831,158 @@ input {
   font-size: 14px;
 }
 
+/* --- New group / group info modals --- */
+
+.new-group-add-row {
+  display: flex;
+  gap: 8px;
+}
+
+.new-group-add-row input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.new-group-add-row input:focus {
+  border-color: var(--accent);
+}
+
+.new-group-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.new-group-member-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-input);
+  border-radius: 16px;
+  padding: 4px 10px 4px 4px;
+  font-size: 13px;
+}
+
+.new-group-member-chip button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.new-group-member-chip button:hover {
+  color: var(--danger);
+}
+
+.group-info-subtitle {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: -12px 0 16px;
+}
+
+.group-member-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.group-member-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.group-member-name {
+  flex: 1;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.group-member-role {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.group-member-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.group-member-actions .btn-secondary {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.group-sender-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+/* --- Voice notes --- */
+
+.voice-player {
+  max-width: 240px;
+  height: 36px;
+}
+
+.voice-bubble {
+  padding: 6px 8px;
+}
+
+.voice-recording-indicator {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 6px 10px;
+}
+
+.voice-recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: voice-pulse 1s infinite;
+  flex-shrink: 0;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.voice-recording-time {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 700px) {

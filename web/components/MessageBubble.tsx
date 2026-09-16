@@ -30,12 +30,14 @@ function StatusTick({ status }: { status: LocalMessage["status"] }) {
 interface MessageBubbleProps {
   message: LocalMessage;
   onOpenViewOnce: (messageId: string) => void;
+  showSender?: boolean;
 }
 
-export function MessageBubble({ message, onOpenViewOnce }: MessageBubbleProps) {
+export function MessageBubble({ message, onOpenViewOnce, showSender }: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
 
-  const isViewOnce = !!message.viewOnce;
+  const isVoice = message.kind === "VOICE";
+  const isViewOnce = !!message.viewOnce && !isVoice;
   const isIncomingUnopened = isViewOnce && message.direction === "in" && !message.viewOnceOpened && !revealed;
 
   function handleTap() {
@@ -53,6 +55,9 @@ export function MessageBubble({ message, onOpenViewOnce }: MessageBubbleProps) {
   } else if (message.direction === "in" && isViewOnce && message.viewOnceOpened && !revealed) {
     body = "🔥 Opened";
     bubbleClass += " view-once-placeholder";
+  } else if (isVoice) {
+    body = <audio controls preload="none" src={message.body} className="voice-player" />;
+    bubbleClass += " voice-bubble";
   } else if (isEmojiOnly(message.body)) {
     bubbleClass += " emoji-only";
   }
@@ -60,6 +65,9 @@ export function MessageBubble({ message, onOpenViewOnce }: MessageBubbleProps) {
   return (
     <div className={`bubble-row ${message.direction}`}>
       <div className={bubbleClass} onClick={isIncomingUnopened ? handleTap : undefined}>
+        {showSender && message.direction === "in" && message.senderUsername && (
+          <span className="group-sender-label">{message.senderUsername}</span>
+        )}
         {body}
         <span className="meta">
           {isViewOnce && <span className="view-once-badge">👁</span>}

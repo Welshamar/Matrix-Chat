@@ -13,6 +13,8 @@ import { createStore, get, set, UseStore } from "idb-keyval";
 export type MessageDirection = "in" | "out";
 export type MessageStatus = "PENDING" | "SENT" | "DELIVERED" | "READ";
 
+export type MessageKind = "TEXT" | "VOICE";
+
 export interface LocalMessage {
   id: string;
   direction: MessageDirection;
@@ -24,6 +26,11 @@ export interface LocalMessage {
   // (controls the blurred "tap to view" placeholder). For an outgoing one:
   // whether the recipient has opened it (drives an "Opened" label).
   viewOnceOpened?: boolean;
+  kind?: MessageKind;
+  // Group threads have more than one possible sender for an "in" message,
+  // so each one carries who actually sent it (unused for 1:1 threads).
+  senderId?: string;
+  senderUsername?: string;
 }
 
 export interface Conversation {
@@ -34,6 +41,33 @@ export interface Conversation {
   lastTimestamp: string;
   favourite?: boolean;
   unreadCount?: number;
+}
+
+export type GroupRole = "ADMIN" | "MEMBER";
+
+export interface LocalGroupMember {
+  userId: string;
+  username: string;
+  avatarUrl?: string | null;
+  role: GroupRole;
+}
+
+export interface LocalGroup {
+  groupId: string;
+  name: string;
+  avatarUrl?: string | null;
+  members: LocalGroupMember[];
+  lastMessage: string;
+  lastTimestamp: string;
+  favourite?: boolean;
+  unreadCount?: number;
+}
+
+// Group message history reuses getMessages/appendMessage/etc. below under
+// the key `group:<groupId>` instead of a peerId — they're keyed by an
+// arbitrary string, so no separate storage functions are needed.
+export function groupThreadKey(groupId: string): string {
+  return `group:${groupId}`;
 }
 
 const MAX_MESSAGES_PER_CONVERSATION = 500;
@@ -145,4 +179,45 @@ export async function clearUnread(userId: string, peerId: string): Promise<void>
 export async function getContactUsername(userId: string, peerId: string): Promise<string | undefined> {
   const conversations = await getConversations(userId);
   return conversations.find((c) => c.peerId === peerId)?.peerUsername;
+}
+
+export async function getGroups(userId: string): Promise<LocalGroup[]> {
+  return (await get<LocalGroup[]>("groups", metaStore(userId))) ?? [];
+}
+
+export async function upsertGroup(userId: string, patch: Partial<LocalGroup> & { groupId: string }): Promise<void> {
+  const existing = await getGroups(userId);
+  const current = existing.find((g) => g.groupId === patch.groupId);
+  const merged: LocalGroup = {
+    groupId: patch.groupId,
+    name: patch.name ?? current?.name ?? "",
+    avatarUrl: patch.avatarUrl ?? current?.avatarUrl ?? null,
+    members: patch.members ?? current?.members ?? [],
+    lastMessage: patch.lastMessage ?? current?.lastMessage ?? "",
+    lastTimestamp: patch.lastTimestamp ?? current?.lastTimestamp ?? new Date().toISOString(),
+    favourite: patch.favourite ?? current?.favourite ?? false,
+    unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
+  };
+  const others = existing.filter((g) => g.groupId !== patch.groupId);
+  const updated = [merged, ...others].sort(
+    (a, b) => new Date(b.lastTimestamp).getTime() - new Date(a.lastTimestamp).getTime()
+  );
+  await set("groups", updated, metaStore(userId));
+}
+
+export async function toggleGroupFavourite(userId: string, groupId: string): Promise<void> {
+  const existing = await getGroups(userId);
+  const current = existing.find((g) => g.groupId === groupId);
+  if (!current) return;
+  await upsertGroup(userId, { groupId, favourite: !current.favourite });
+}
+
+export async function incrementGroupUnread(userId: string, groupId: string): Promise<void> {
+  const existing = await getGroups(userId);
+  const current = existing.find((g) => g.groupId === groupId);
+  await upsertGroup(userId, { groupId, unreadCount: (current?.unreadCount ?? 0) + 1 });
+}
+
+export async function clearGroupUnread(userId: string, groupId: string): Promise<void> {
+  await upsertGroup(userId, { groupId, unreadCount: 0 });
 }

@@ -1,12 +1,16 @@
 import { io, Socket } from "socket.io-client";
 import { API_URL } from "./api";
 
+export type MessageKind = "TEXT" | "VOICE";
+
 export interface InboundSignalMessage {
   id: string;
   senderId: string;
   ciphertext: string;
   signalMessageType: number;
   viewOnce: boolean;
+  kind: MessageKind;
+  groupId: string | null;
   timestamp: string;
 }
 
@@ -31,15 +35,29 @@ export function connectSignalSocket(token: string): Socket {
   return io(API_URL, { auth: { token }, transports: ["websocket"] });
 }
 
-export function sendSignalMessage(
-  socket: Socket,
-  recipientId: string,
-  ciphertext: string,
-  signalMessageType: number,
-  viewOnce = false
-): Promise<SocketAck> {
+export interface SendSignalMessageOptions {
+  recipientId: string;
+  ciphertext: string;
+  signalMessageType: number;
+  viewOnce?: boolean;
+  kind?: MessageKind;
+  groupId?: string;
+}
+
+export function sendSignalMessage(socket: Socket, opts: SendSignalMessageOptions): Promise<SocketAck> {
   return new Promise((resolve) => {
-    socket.emit("signal:message", { recipientId, ciphertext, signalMessageType, viewOnce }, resolve);
+    socket.emit(
+      "signal:message",
+      {
+        recipientId: opts.recipientId,
+        ciphertext: opts.ciphertext,
+        signalMessageType: opts.signalMessageType,
+        viewOnce: opts.viewOnce ?? false,
+        kind: opts.kind ?? "TEXT",
+        groupId: opts.groupId,
+      },
+      resolve
+    );
   });
 }
 
