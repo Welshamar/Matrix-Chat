@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
 
 function formatTime(iso: string): string {
@@ -7,6 +7,8 @@ function formatTime(iso: string): string {
 }
 
 const EMOJI_ONLY_MAX_CHARS = 12;
+const SWIPE_TRIGGER_PX = 56;
+const SWIPE_MAX_PX = 72;
 
 // True for a short message made up entirely of emoji (optionally combined
 // with ZWJs/variation selectors) — WhatsApp renders these oversized with
@@ -30,11 +32,20 @@ function StatusTick({ status }: { status: LocalMessage["status"] }) {
 interface MessageBubbleProps {
   message: LocalMessage;
   onOpenViewOnce: (messageId: string) => void;
+  onReply: (message: LocalMessage) => void;
+  onDelete: (messageId: string) => void;
   showSender?: boolean;
 }
 
-export function MessageBubble({ message, onOpenViewOnce, showSender }: MessageBubbleProps) {
+export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, showSender }: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dragX, setDragX] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+
+  const dragState = useRef<{ pointerId: number; startX: number; startY: number; active: boolean; locked: boolean } | null>(
+    null
+  );
 
   const isVoice = message.kind === "VOICE";
   const isViewOnce = !!message.viewOnce && !isVoice;
@@ -44,6 +55,59 @@ export function MessageBubble({ message, onOpenViewOnce, showSender }: MessageBu
     if (!isIncomingUnopened) return;
     setRevealed(true);
     onOpenViewOnce(message.id);
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    if (menuOpen) return;
+    dragState.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, active: false, locked: false };
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    const state = dragState.current;
+    if (!state || e.pointerId !== state.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+
+    if (!state.locked) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      // Only take over the gesture once it's clearly more horizontal than
+      // vertical, so normal vertical scrolling of the message list still works.
+      if (Math.abs(dy) > Math.abs(dx)) {
+        state.locked = true;
+        state.active = false;
+        return;
+      }
+      state.locked = true;
+      state.active = true;
+      try {
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // Some environments (or synthetic pointers) can't capture — the
+        // gesture still works, it just won't keep tracking past the element.
+      }
+    }
+    if (!state.active) return;
+
+    e.preventDefault();
+    const clamped = Math.max(-SWIPE_MAX_PX, Math.min(SWIPE_MAX_PX, dx));
+    setSwiping(true);
+    setDragX(clamped);
+  }
+
+  function endDrag(e: React.PointerEvent) {
+    const state = dragState.current;
+    if (!state || e.pointerId !== state.pointerId) return;
+    dragState.current = null;
+    if (state.active && Math.abs(dragX) >= SWIPE_TRIGGER_PX) {
+      onReply(message);
+    }
+    setSwiping(false);
+    setDragX(0);
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // Not captured — nothing to release.
+    }
   }
 
   let body: React.ReactNode = message.body;
@@ -64,9 +128,32 @@ export function MessageBubble({ message, onOpenViewOnce, showSender }: MessageBu
 
   return (
     <div className={`bubble-row ${message.direction}`}>
-      <div className={bubbleClass} onClick={isIncomingUnopened ? handleTap : undefined}>
+      <div
+        className="msg-swipe-icon"
+        style={{
+          opacity: Math.min(1, Math.abs(dragX) / SWIPE_TRIGGER_PX),
+          ...(dragX < 0 ? { left: "auto", right: 4 } : { left: 4, right: "auto" }),
+        }}
+      >
+        ↩
+      </div>
+      <div
+        className={bubbleClass}
+        style={dragX ? { transform: `translateX(${dragX}px)`, transition: swiping ? "none" : "transform 0.15s ease" } : undefined}
+        onClick={isIncomingUnopened ? handleTap : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
         {showSender && message.direction === "in" && message.senderUsername && (
           <span className="group-sender-label">{message.senderUsername}</span>
+        )}
+        {message.replyTo && (
+          <div className="reply-quote">
+            <span className="reply-quote-sender">{message.replyTo.senderLabel}</span>
+            <span className="reply-quote-preview">{message.replyTo.preview}</span>
+          </div>
         )}
         {body}
         <span className="meta">
@@ -83,6 +170,43 @@ export function MessageBubble({ message, onOpenViewOnce, showSender }: MessageBu
             </>
           )}
         </span>
+
+        <button
+          type="button"
+          className="msg-menu-trigger"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+          aria-label="Message options"
+        >
+          ⌄
+        </button>
+        {menuOpen && (
+          <>
+            <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
+            <div className="dropdown-menu msg-dropdown-menu">
+              <button
+                className="dropdown-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onReply(message);
+                }}
+              >
+                Reply
+              </button>
+              <button
+                className="dropdown-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete(message.id);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

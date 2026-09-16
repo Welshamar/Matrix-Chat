@@ -31,6 +31,7 @@ import {
   clearGroupUnread,
   clearUnread,
   Conversation,
+  deleteMessage,
   getConversations,
   getGroups,
   getMessages,
@@ -46,6 +47,7 @@ import {
   upsertConversation,
   upsertGroup,
 } from "@/lib/localDb";
+import { encodeEnvelope, decodeEnvelope, ReplyRef } from "@/lib/messageEnvelope";
 import { MessageBubble } from "@/components/MessageBubble";
 import { Avatar } from "@/components/Avatar";
 import { EmojiPicker } from "@/components/EmojiPicker";
@@ -88,6 +90,7 @@ export default function ChatPage() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showNewGroupModal, setShowNewGroupModal] = useState(false);
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -97,6 +100,7 @@ export default function ChatPage() {
   const initRan = useRef(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const composerInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     activePeerRef.current = activePeer;
@@ -206,10 +210,11 @@ export default function ChatPage() {
 
       socket.on("signal:message", async (msg: InboundSignalMessage) => {
         try {
-          const plaintext = await client.decryptMessage(msg.senderId, {
+          const rawPlaintext = await client.decryptMessage(msg.senderId, {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
+          const { text: plaintext, replyTo } = decodeEnvelope(rawPlaintext);
 
           if (msg.groupId) {
             const group = await ensureGroup(
@@ -230,6 +235,7 @@ export default function ChatPage() {
               kind: msg.kind,
               senderId: msg.senderId,
               senderUsername,
+              replyTo,
             });
 
             if (activeGroupRef.current?.groupId === msg.groupId) {
@@ -255,6 +261,7 @@ export default function ChatPage() {
               status: "DELIVERED",
               viewOnce: msg.viewOnce,
               kind: msg.kind,
+              replyTo,
             });
 
             if (activePeerRef.current?.peerId === msg.senderId) {
@@ -320,10 +327,11 @@ export default function ChatPage() {
       const pending = await fetchInbox(session.token);
       for (const msg of pending) {
         try {
-          const plaintext = await client.decryptMessage(msg.senderId, {
+          const rawPlaintext = await client.decryptMessage(msg.senderId, {
             ciphertext: msg.ciphertext,
             signalMessageType: msg.signalMessageType,
           });
+          const { text: plaintext, replyTo } = decodeEnvelope(rawPlaintext);
           if (msg.groupId) {
             const group = await ensureGroup(
               session.userId,
@@ -343,6 +351,7 @@ export default function ChatPage() {
               kind: msg.kind,
               senderId: msg.senderId,
               senderUsername,
+              replyTo,
             });
             await incrementGroupUnread(session.userId, msg.groupId);
           } else {
@@ -361,6 +370,7 @@ export default function ChatPage() {
               status: "DELIVERED",
               viewOnce: msg.viewOnce,
               kind: msg.kind,
+              replyTo,
             });
             await incrementUnread(session.userId, msg.senderId);
           }
@@ -429,6 +439,7 @@ export default function ChatPage() {
     setActiveGroup(null);
     setActivePeer(conv);
     setShowEmojiPicker(false);
+    setReplyingTo(null);
     setMessages(await getMessages(session.userId, conv.peerId));
     if (socketRef.current) {
       await markThreadRead(session.userId, conv.peerId, socketRef.current);
@@ -442,6 +453,7 @@ export default function ChatPage() {
     setActivePeer(null);
     setActiveGroup(group);
     setShowEmojiPicker(false);
+    setReplyingTo(null);
     setMessages(await getMessages(session.userId, groupThreadKey(group.groupId)));
     if (socketRef.current) {
       await markThreadRead(session.userId, groupThreadKey(group.groupId), socketRef.current);
@@ -509,15 +521,16 @@ export default function ChatPage() {
     }
   }
 
-  async function sendToActiveThread(body: string, kind: "TEXT" | "VOICE") {
+  async function sendToActiveThread(body: string, kind: "TEXT" | "VOICE", replyTo?: ReplyRef) {
     if (!session || !clientRef.current || !socketRef.current) return;
     const wasViewOnce = viewOnceArmed && kind === "TEXT";
+    const wireBody = encodeEnvelope(body, replyTo);
 
     if (activeGroup) {
       const others = activeGroup.members.filter((m) => m.userId !== session.userId);
       let localId: string | null = null;
       for (const member of others) {
-        const envelope = await clientRef.current.encryptMessage(member.userId, body);
+        const envelope = await clientRef.current.encryptMessage(member.userId, wireBody);
         const ack = await sendSignalMessage(socketRef.current, {
           recipientId: member.userId,
           ciphertext: envelope.ciphertext,
@@ -537,6 +550,7 @@ export default function ChatPage() {
         kind,
         senderId: session.userId,
         senderUsername: session.username,
+        replyTo,
       });
       await upsertGroup(session.userId, {
         groupId: activeGroup.groupId,
@@ -549,7 +563,7 @@ export default function ChatPage() {
     }
 
     if (!activePeer) return;
-    const envelope = await clientRef.current.encryptMessage(activePeer.peerId, body);
+    const envelope = await clientRef.current.encryptMessage(activePeer.peerId, wireBody);
     const ack = await sendSignalMessage(socketRef.current, {
       recipientId: activePeer.peerId,
       ciphertext: envelope.ciphertext,
@@ -571,6 +585,7 @@ export default function ChatPage() {
       status: "SENT",
       viewOnce: wasViewOnce,
       kind,
+      replyTo,
     });
     await upsertConversation(session.userId, {
       peerId: activePeer.peerId,
@@ -581,6 +596,47 @@ export default function ChatPage() {
     setMessages(await getMessages(session.userId, activePeer.peerId));
   }
 
+  // Label shown above the quoted snippet, from the replying user's point of
+  // view: "You" for their own earlier message, otherwise the original sender.
+  function replySenderLabelFor(m: LocalMessage): string {
+    if (m.direction === "out") return "You";
+    return m.senderUsername ?? activePeer?.peerUsername ?? "Unknown";
+  }
+
+  function buildReplyRef(m: LocalMessage): ReplyRef {
+    return {
+      messageId: m.id,
+      senderLabel: replySenderLabelFor(m),
+      preview: summarize(m.kind ?? "TEXT", m.viewOnce, m.body),
+    };
+  }
+
+  function handleReplyToMessage(message: LocalMessage) {
+    setReplyingTo(message);
+    composerInputRef.current?.focus();
+  }
+
+  async function handleDeleteMessage(messageId: string) {
+    if (!session) return;
+    const threadKey = activeGroup ? groupThreadKey(activeGroup.groupId) : activePeer?.peerId;
+    if (!threadKey) return;
+
+    await deleteMessage(session.userId, threadKey, messageId);
+    const updated = await getMessages(session.userId, threadKey);
+    setMessages(updated);
+
+    const last = updated[updated.length - 1];
+    const lastMessage = last ? summarize(last.kind ?? "TEXT", last.viewOnce, last.body) : "";
+    const lastTimestamp = last ? last.timestamp : new Date().toISOString();
+    if (activeGroup) {
+      await upsertGroup(session.userId, { groupId: activeGroup.groupId, lastMessage, lastTimestamp });
+      await refreshGroups(session.userId);
+    } else if (activePeer) {
+      await upsertConversation(session.userId, { peerId: activePeer.peerId, lastMessage, lastTimestamp });
+      await refreshConversations(session.userId);
+    }
+  }
+
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const text = draft.trim();
@@ -588,9 +644,11 @@ export default function ChatPage() {
 
     setSending(true);
     try {
-      await sendToActiveThread(text, "TEXT");
+      const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
+      await sendToActiveThread(text, "TEXT", replyRef);
       setDraft("");
       setViewOnceArmed(false);
+      setReplyingTo(null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -601,7 +659,9 @@ export default function ChatPage() {
   async function handleVoiceRecorded(dataUrl: string) {
     setSending(true);
     try {
-      await sendToActiveThread(dataUrl, "VOICE");
+      const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
+      await sendToActiveThread(dataUrl, "VOICE", replyRef);
+      setReplyingTo(null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -848,9 +908,35 @@ export default function ChatPage() {
             </div>
             <div className="message-list" ref={messageListRef}>
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} onOpenViewOnce={handleOpenViewOnce} showSender={!!activeGroup} />
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  onOpenViewOnce={handleOpenViewOnce}
+                  showSender={!!activeGroup}
+                  onReply={handleReplyToMessage}
+                  onDelete={handleDeleteMessage}
+                />
               ))}
             </div>
+            {replyingTo && (
+              <div className="reply-preview-bar">
+                <div className="reply-preview-accent" />
+                <div className="reply-preview-text">
+                  <span className="reply-preview-sender">{replySenderLabelFor(replyingTo)}</span>
+                  <span className="reply-preview-body">
+                    {summarize(replyingTo.kind ?? "TEXT", replyingTo.viewOnce, replyingTo.body)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="reply-preview-close"
+                  onClick={() => setReplyingTo(null)}
+                  aria-label="Cancel reply"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
             <form className="composer" onSubmit={handleSend}>
               <div className="composer-input-pill">
                 <button
@@ -870,6 +956,7 @@ export default function ChatPage() {
                   <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
                 )}
                 <input
+                  ref={composerInputRef}
                   placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}

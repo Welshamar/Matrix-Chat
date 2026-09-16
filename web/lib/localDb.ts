@@ -1,4 +1,5 @@
 import { createStore, get, set, UseStore } from "idb-keyval";
+import { ReplyRef } from "./messageEnvelope";
 
 /**
  * Local, per-browser cache of decrypted chat history and the conversation
@@ -31,6 +32,7 @@ export interface LocalMessage {
   // so each one carries who actually sent it (unused for 1:1 threads).
   senderId?: string;
   senderUsername?: string;
+  replyTo?: ReplyRef;
 }
 
 export interface Conversation {
@@ -127,6 +129,15 @@ export async function updateMessageStatus(
 export async function markViewOnceOpened(userId: string, peerId: string, messageId: string): Promise<void> {
   const existing = await getMessages(userId, peerId);
   const updated = existing.map((m) => (m.id === messageId ? { ...m, viewOnceOpened: true } : m));
+  await set(`conv:${peerId}`, updated, messagesStore(userId));
+}
+
+// "Delete for me": removes the message from this device's local cache only.
+// There is no server-side message store to delete from — the relay never
+// retains plaintext, and delivered ciphertext is already gone from the inbox.
+export async function deleteMessage(userId: string, peerId: string, messageId: string): Promise<void> {
+  const existing = await getMessages(userId, peerId);
+  const updated = existing.filter((m) => m.id !== messageId);
   await set(`conv:${peerId}`, updated, messagesStore(userId));
 }
 
