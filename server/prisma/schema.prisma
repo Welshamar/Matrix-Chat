@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A registered device/user identity. The server only ever stores PUBLIC
+// key material for this user — private keys never leave the client.
+model User {
+  id             String   @id @default(uuid())
+  username       String   @unique
+  passwordHash   String
+  registrationId Int?
+  createdAt      DateTime @default(now())
+
+  identityKey    IdentityKey?
+  signedPreKey   SignedPreKey?
+  oneTimePreKeys OneTimePreKey[]
+
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+}
+
+// Long-term Curve25519 identity public key (Signal Protocol IdentityKey).
+model IdentityKey {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  publicKey String // base64
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Medium-term signed prekey, rotated periodically by the client and
+// verified against the identity key's signature before use.
+model SignedPreKey {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  keyId     Int
+  publicKey String // base64
+  signature String // base64
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// One-time prekeys consumed exactly once during X3DH session setup, then
+// marked used so they are never handed out twice.
+model OneTimePreKey {
+  id        String   @id @default(uuid())
+  userId    String
+  keyId     Int
+  publicKey String // base64
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, keyId])
+  @@index([userId, used])
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+// Zero-knowledge relay row: `ciphertext` is an opaque Double Ratchet
+// blob. The server never decrypts it, never derives keys from it, and
+// this is the ONLY message content ever persisted.
+model Message {
+  id                String        @id @default(uuid())
+  senderId          String
+  recipientId       String
+  ciphertext        String // base64 Signal ciphertext blob — opaque to the server
+  signalMessageType Int // 3 = PreKeyWhisperMessage, 1 = WhisperMessage
+  status            MessageStatus @default(SENT)
+  timestamp         DateTime      @default(now())
+
+  sender    User @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User @relation("ReceivedMessages", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, timestamp])
+  @@index([senderId, timestamp])
+}

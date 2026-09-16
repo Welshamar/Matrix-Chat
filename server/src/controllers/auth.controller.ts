@@ -1,0 +1,91 @@
+import { Request, Response } from "express";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { prisma } from "../db/prisma";
+import { env } from "../config/env";
+
+const BCRYPT_ROUNDS = 12;
+const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
+
+function issueToken(userId: string): string {
+  return jwt.sign({ sub: userId }, env.JWT_SECRET, { expiresIn: "30d" });
+}
+
+export async function register(req: Request, res: Response): Promise<void> {
+  const { username, password } = req.body as { username?: string; password?: string };
+
+  if (!username || !USERNAME_PATTERN.test(username)) {
+    res.status(400).json({ error: "Username must be 3-32 chars: letters, numbers, _ . -" });
+    return;
+  }
+  if (!password || password.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters." });
+    return;
+  }
+
+  const existing = await prisma.user.findUnique({ where: { username } });
+  if (existing) {
+    res.status(409).json({ error: "Username is already taken." });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const user = await prisma.user.create({ data: { username, passwordHash } });
+
+  res.status(201).json({ userId: user.id, username: user.username, token: issueToken(user.id) });
+}
+
+export async function login(req: Request, res: Response): Promise<void> {
+  const { username, password } = req.body as { username?: string; password?: string };
+
+  if (!username || !password) {
+    res.status(400).json({ error: "username and password are required." });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { username } });
+  if (!user) {
+    res.status(401).json({ error: "Invalid username or password." });
+    return;
+  }
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    res.status(401).json({ error: "Invalid username or password." });
+    return;
+  }
+
+  res.json({ userId: user.id, username: user.username, token: issueToken(user.id) });
+}
+
+/** GET /api/auth/lookup/:username — resolve a username to a userId to start a chat. */
+export async function lookupUsername(req: Request, res: Response): Promise<void> {
+  const { username } = req.params;
+  const user = await prisma.user.findUnique({
+    where: { username },
+    select: { id: true, username: true },
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "No user with that username." });
+    return;
+  }
+
+  res.json({ userId: user.id, username: user.username });
+}
+
+/** GET /api/auth/resolve/:userId — resolve a userId back to a username (e.g. for an inbound message from an unknown sender). */
+export async function resolveUserId(req: Request, res: Response): Promise<void> {
+  const { userId } = req.params;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, username: true },
+  });
+
+  if (!user) {
+    res.status(404).json({ error: "No user with that id." });
+    return;
+  }
+
+  res.json({ userId: user.id, username: user.username });
+}
