@@ -446,6 +446,23 @@ input {
   color: var(--text-dim);
 }
 
+.bubble.emoji-only {
+  background: transparent;
+  font-size: 2.75rem;
+  line-height: 1.1;
+  padding: 4px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.bubble.emoji-only .meta {
+  background: var(--bg-panel-elevated);
+  border-radius: 10px;
+  padding: 2px 8px;
+  margin-top: 2px;
+}
+
 .bubble .meta {
   display: flex;
   align-items: center;
@@ -489,10 +506,6 @@ input {
   position: relative;
 }
 
-.composer-emoji-wrap {
-  position: relative;
-}
-
 .composer-icon-btn {
   background: none;
   border: none;
@@ -500,6 +513,8 @@ input {
   padding: 6px;
   border-radius: 50%;
   line-height: 1;
+  color: var(--text-dim);
+  flex-shrink: 0;
 }
 
 .composer-icon-btn:hover {
@@ -508,21 +523,50 @@ input {
 
 .composer-icon-btn.armed {
   background: var(--accent);
+  color: #06231d;
 }
 
-.composer input {
+.composer-input-pill {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 10px 16px;
-  color: var(--text);
-  font-size: 14px;
-  outline: none;
+  border-radius: 24px;
+  padding: 4px 8px 4px 4px;
+  position: relative;
 }
 
-.composer input:focus {
+.composer-input-pill:focus-within {
   border-color: var(--accent);
+}
+
+.composer-emoji-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  padding: 6px;
+  border-radius: 50%;
+  line-height: 1;
+  display: flex;
+  flex-shrink: 0;
+}
+
+.composer-emoji-btn:hover {
+  background: var(--bg-panel-elevated);
+  color: var(--text);
+}
+
+.composer-input-pill input {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 8px 4px;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  min-width: 0;
 }
 
 .composer-send-btn {

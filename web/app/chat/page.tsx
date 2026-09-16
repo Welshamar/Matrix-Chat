@@ -411,18 +411,29 @@ export default function ChatPage() {
               ))}
             </div>
             <form className="composer" onSubmit={handleSend}>
-              <div className="composer-emoji-wrap">
+              <div className="composer-input-pill">
                 <button
                   type="button"
-                  className="composer-icon-btn"
+                  className="composer-emoji-btn"
                   onClick={() => setShowEmojiPicker((v) => !v)}
                   aria-label="Emoji"
                 >
-                  😊
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                    <circle cx="12" cy="12" r="9.25" />
+                    <circle cx="8.7" cy="10" r="1.05" fill="currentColor" stroke="none" />
+                    <circle cx="15.3" cy="10" r="1.05" fill="currentColor" stroke="none" />
+                    <path d="M7.5 14.25c1.05 1.5 2.7 2.35 4.5 2.35s3.45-.85 4.5-2.35" strokeLinecap="round" />
+                  </svg>
                 </button>
                 {showEmojiPicker && (
                   <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
                 )}
+                <input
+                  placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  disabled={sending}
+                />
               </div>
               <button
                 type="button"
@@ -433,12 +444,6 @@ export default function ChatPage() {
               >
                 {viewOnceArmed ? "1️⃣" : "👁"}
               </button>
-              <input
-                placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                disabled={sending}
-              />
               <button type="submit" className="composer-send-btn" disabled={sending || !draft.trim()}>
                 ➤
               </button>

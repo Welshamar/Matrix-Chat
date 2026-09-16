@@ -6,6 +6,20 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const EMOJI_ONLY_MAX_CHARS = 12;
+
+// True for a short message made up entirely of emoji (optionally combined
+// with ZWJs/variation selectors) — WhatsApp renders these oversized with
+// no bubble chrome instead of as normal chat text.
+function isEmojiOnly(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const stripped = trimmed.replace(/[‍️]/gu, "");
+  const chars = Array.from(stripped);
+  if (chars.length === 0 || chars.length > EMOJI_ONLY_MAX_CHARS) return false;
+  return chars.every((ch) => /\p{Extended_Pictographic}/u.test(ch));
+}
+
 function StatusTick({ status }: { status: LocalMessage["status"] }) {
   if (status === "PENDING") return <span className="tick tick-pending">🕐</span>;
   if (status === "SENT") return <span className="tick">✓</span>;
@@ -39,6 +53,8 @@ export function MessageBubble({ message, onOpenViewOnce }: MessageBubbleProps) {
   } else if (message.direction === "in" && isViewOnce && message.viewOnceOpened && !revealed) {
     body = "🔥 Opened";
     bubbleClass += " view-once-placeholder";
+  } else if (isEmojiOnly(message.body)) {
+    bubbleClass += " emoji-only";
   }
 
   return (
