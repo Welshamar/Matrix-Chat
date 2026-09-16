@@ -601,7 +601,46 @@ input {
 }
 
 .msg-dropdown-menu {
-  top: 22px;
+  top: 26px;
+  min-width: 190px;
+  padding: 8px;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+/* Incoming bubbles sit close to the left edge of the chat pane, so anchor
+   the menu to the bubble's left edge instead of its right — anchoring
+   right:0 on a narrow bubble would push the menu leftward off the pane. */
+.bubble-row:not(.out) .msg-dropdown-menu {
+  left: 0;
+  right: auto;
+}
+
+.msg-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 12px;
+  font-size: 14.5px;
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.msg-dropdown-item svg {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.msg-dropdown-item:hover {
+  background: var(--bg-input);
+}
+
+.msg-dropdown-item.danger {
+  color: var(--danger);
+}
+
+.msg-dropdown-item.danger svg {
+  color: var(--danger);
 }
 
 .reply-quote {

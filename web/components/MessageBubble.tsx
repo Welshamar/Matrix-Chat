@@ -187,21 +187,31 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
             <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
             <div className="dropdown-menu msg-dropdown-menu">
               <button
-                className="dropdown-item"
+                className="dropdown-item msg-dropdown-item"
                 onClick={() => {
                   setMenuOpen(false);
                   onReply(message);
                 }}
               >
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M9 10 4 15l5 5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 15h10.5a5.5 5.5 0 0 0 0-11H12" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
                 Reply
               </button>
               <button
-                className="dropdown-item"
+                className="dropdown-item msg-dropdown-item danger"
                 onClick={() => {
                   setMenuOpen(false);
                   onDelete(message.id);
                 }}
               >
+                <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M5 7h14" strokeLinecap="round" />
+                  <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M7 7l1 13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-13" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M10 11v6M14 11v6" strokeLinecap="round" />
+                </svg>
                 Delete
               </button>
             </div>
