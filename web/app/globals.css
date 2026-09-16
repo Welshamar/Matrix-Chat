@@ -579,14 +579,14 @@ input {
 
 .msg-menu-trigger {
   position: absolute;
-  top: 3px;
-  right: 3px;
+  top: -8px;
+  right: -10px;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--bg-panel-elevated);
   border: none;
   color: var(--text-dim);
   line-height: 1;
@@ -594,6 +594,7 @@ input {
   border-radius: 50%;
   opacity: 0;
   cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
 .bubble-row:hover .msg-menu-trigger {
