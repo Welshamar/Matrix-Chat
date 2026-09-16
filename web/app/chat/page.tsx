@@ -875,25 +875,25 @@ export default function ChatPage() {
                   onChange={(e) => setDraft(e.target.value)}
                   disabled={sending}
                 />
+                {!activeGroup && (
+                  <button
+                    type="button"
+                    className={`composer-emoji-btn ${viewOnceArmed ? "armed" : ""}`}
+                    onClick={() => setViewOnceArmed((v) => !v)}
+                    aria-label="Toggle view-once"
+                    title="Send as view-once"
+                  >
+                    {viewOnceArmed ? "1️⃣" : "👁"}
+                  </button>
+                )}
+                {draft.trim() ? (
+                  <button type="submit" className="composer-send-btn" disabled={sending}>
+                    ➤
+                  </button>
+                ) : (
+                  <VoiceRecorderButton onRecorded={handleVoiceRecorded} disabled={sending} />
+                )}
               </div>
-              {!activeGroup && (
-                <button
-                  type="button"
-                  className={`composer-icon-btn ${viewOnceArmed ? "armed" : ""}`}
-                  onClick={() => setViewOnceArmed((v) => !v)}
-                  aria-label="Toggle view-once"
-                  title="Send as view-once"
-                >
-                  {viewOnceArmed ? "1️⃣" : "👁"}
-                </button>
-              )}
-              {draft.trim() ? (
-                <button type="submit" className="composer-send-btn" disabled={sending}>
-                  ➤
-                </button>
-              ) : (
-                <VoiceRecorderButton onRecorded={handleVoiceRecorded} disabled={sending} />
-              )}
             </form>
           </>
         )}

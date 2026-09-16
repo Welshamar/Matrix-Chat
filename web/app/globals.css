@@ -664,11 +664,11 @@ input {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 24px;
-  padding: 4px 8px 4px 4px;
+  padding: 4px 6px 4px 4px;
   position: relative;
 }
 
@@ -692,6 +692,11 @@ input {
   color: var(--text);
 }
 
+.composer-emoji-btn.armed {
+  background: var(--accent);
+  color: #06231d;
+}
+
 .composer-input-pill input {
   flex: 1;
   background: none;
@@ -708,9 +713,9 @@ input {
   border: none;
   color: #06231d;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  font-size: 16px;
+  width: 34px;
+  height: 34px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 
@@ -952,10 +957,8 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 6px 10px;
+  padding: 4px 2px;
+  min-width: 0;
 }
 
 .voice-recording-dot {

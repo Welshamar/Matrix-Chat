@@ -104,7 +104,7 @@ export function VoiceRecorderButton({ onRecorded, disabled }: VoiceRecorderButto
       <div className="voice-recording-indicator">
         <span className="voice-recording-dot" />
         <span className="voice-recording-time">{formatElapsed(elapsed)}</span>
-        <button type="button" className="composer-icon-btn" onClick={handleCancel} aria-label="Cancel recording">
+        <button type="button" className="composer-emoji-btn" onClick={handleCancel} aria-label="Cancel recording">
           🗑
         </button>
         <button type="button" className="composer-send-btn" onClick={stopRecording} aria-label="Send voice message">
@@ -118,13 +118,18 @@ export function VoiceRecorderButton({ onRecorded, disabled }: VoiceRecorderButto
     <>
       <button
         type="button"
-        className="composer-icon-btn"
+        className="composer-emoji-btn"
         onClick={startRecording}
         disabled={disabled}
         aria-label="Record voice message"
         title="Record voice message"
       >
-        🎤
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6">
+          <rect x="9" y="2.5" width="6" height="12" rx="3" />
+          <path d="M5.5 11a6.5 6.5 0 0 0 13 0" strokeLinecap="round" />
+          <path d="M12 17.5v3" strokeLinecap="round" />
+          <path d="M8.5 20.5h7" strokeLinecap="round" />
+        </svg>
       </button>
       {error && <div className="inline-error">{error}</div>}
     </>
