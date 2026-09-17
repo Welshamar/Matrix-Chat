@@ -32,6 +32,8 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
 import { RingtonePlayer } from "@/lib/ringtone";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 import {
   appendMessage,
   clearGroupUnread,
@@ -157,6 +159,105 @@ export default function ChatPage() {
   useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+
+  // --- Android hardware back button ---
+  // Refs so the one-time listener registered below (see the Capacitor
+  // effect further down) always reads current state without needing to
+  // re-register on every state change, matching the pattern already used
+  // for call state above.
+  const showGroupInfoModalRef = useRef(false);
+  const showNewGroupModalRef = useRef(false);
+  const showProfileModalRef = useRef(false);
+  const showContactDetailsRef = useRef(false);
+  const showEmojiPickerRef = useRef(false);
+  const exitPromptArmedRef = useRef(false);
+  const exitPromptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showExitPrompt, setShowExitPrompt] = useState(false);
+
+  useEffect(() => {
+    showGroupInfoModalRef.current = showGroupInfoModal;
+  }, [showGroupInfoModal]);
+  useEffect(() => {
+    showNewGroupModalRef.current = showNewGroupModal;
+  }, [showNewGroupModal]);
+  useEffect(() => {
+    showProfileModalRef.current = showProfileModal;
+  }, [showProfileModal]);
+  useEffect(() => {
+    showContactDetailsRef.current = showContactDetails;
+  }, [showContactDetails]);
+  useEffect(() => {
+    showEmojiPickerRef.current = showEmojiPicker;
+  }, [showEmojiPicker]);
+
+  // Mirrors WhatsApp: back closes whatever's open (innermost first), then
+  // backs out of an open thread to the chat list, and only exits the app
+  // from the list root after a second back press within 2s. Only wired up
+  // inside the Capacitor Android shell — a normal browser tab already gets
+  // correct back behavior for free from browser history, and there's no
+  // hardware back button to intercept on desktop/iOS anyway.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let removed = false;
+    let handle: { remove: () => void } | null = null;
+
+    const subPromise = CapacitorApp.addListener("backButton", () => {
+      if (showGroupInfoModalRef.current) {
+        setShowGroupInfoModal(false);
+        return;
+      }
+      if (showNewGroupModalRef.current) {
+        setShowNewGroupModal(false);
+        return;
+      }
+      if (showProfileModalRef.current) {
+        setShowProfileModal(false);
+        return;
+      }
+      if (showContactDetailsRef.current) {
+        setShowContactDetails(false);
+        return;
+      }
+      if (showEmojiPickerRef.current) {
+        setShowEmojiPicker(false);
+        return;
+      }
+      // An active call overlay intentionally swallows back rather than
+      // hanging up or exiting — accidentally dropping a call is worse than
+      // a no-op here.
+      if (callStatusRef.current) return;
+      if (activePeerRef.current || activeGroupRef.current) {
+        handleBackToList();
+        return;
+      }
+      if (exitPromptArmedRef.current) {
+        CapacitorApp.exitApp();
+        return;
+      }
+      exitPromptArmedRef.current = true;
+      setShowExitPrompt(true);
+      if (exitPromptTimeoutRef.current) clearTimeout(exitPromptTimeoutRef.current);
+      exitPromptTimeoutRef.current = setTimeout(() => {
+        exitPromptArmedRef.current = false;
+        setShowExitPrompt(false);
+      }, 2000);
+    });
+    subPromise.then((h) => {
+      if (removed) {
+        h.remove();
+        return;
+      }
+      handle = h;
+    });
+
+    return () => {
+      removed = true;
+      handle?.remove();
+      if (exitPromptTimeoutRef.current) clearTimeout(exitPromptTimeoutRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const refreshConversations = useCallback(async (userId: string) => {
     setConversations(await getConversations(userId));
@@ -1390,6 +1491,7 @@ export default function ChatPage() {
         />
       )}
       <audio ref={remoteAudioRef} autoPlay hidden />
+      {showExitPrompt && <div className="exit-prompt-toast">Press back again to exit</div>}
     </div>
   );
 }

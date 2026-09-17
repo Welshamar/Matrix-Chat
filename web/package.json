@@ -9,6 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@privacyresearch/libsignal-protocol-typescript": "^0.0.16",
     "idb-keyval": "^6.2.1",
     "next": "^14.2.35",

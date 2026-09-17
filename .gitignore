@@ -6,3 +6,15 @@ dist-demo/
 .next/
 next-env.d.ts
 *.tsbuildinfo
+
+# Android/Capacitor: local.properties has a machine-specific SDK path, and
+# everything else here is a regenerable build artifact (recreated by
+# `npx cap sync android` + Gradle) — only the hand-authored project files
+# under web/android are worth tracking.
+web/android/local.properties
+web/android/.gradle/
+web/android/**/build/
+web/android/.idea/
+web/android/captures/
+web/android/*.iml
+web/android/**/*.iml

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Matrix Chat</string>
+    <string name="title_activity_main">Matrix Chat</string>
+    <string name="package_name">com.matrixchat.app</string>
+    <string name="custom_url_scheme">com.matrixchat.app</string>
+</resources>
