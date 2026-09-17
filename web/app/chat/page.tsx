@@ -100,6 +100,7 @@ export default function ChatPage() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [viewOnceArmed, setViewOnceArmed] = useState(false);
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showNewGroupModal, setShowNewGroupModal] = useState(false);
@@ -1191,6 +1192,10 @@ export default function ChatPage() {
   return (
     <div className={`chat-shell ${activePeer || activeGroup ? "has-active-thread" : ""}`}>
       <aside className="sidebar">
+        <div className="sidebar-brand-bar">
+          <span className="sidebar-brand-logo" aria-hidden="true">🔒</span>
+          <span className="sidebar-brand-name">Matrix Chat</span>
+        </div>
         <div className="sidebar-header">
           <button className="me" onClick={() => setShowProfileModal(true)}>
             <Avatar name={session.username} avatarUrl={session.avatarUrl} size={36} />
@@ -1391,48 +1396,56 @@ export default function ChatPage() {
               </div>
             )}
             <form className="composer" onSubmit={handleSend}>
-              <div className="composer-input-pill">
-                <button
-                  type="button"
-                  className="composer-emoji-btn"
-                  onClick={() => setShowEmojiPicker((v) => !v)}
-                  aria-label="Emoji"
-                >
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.6">
-                    <circle cx="12" cy="12" r="9.25" />
-                    <circle cx="8.7" cy="10" r="1.05" fill="currentColor" stroke="none" />
-                    <circle cx="15.3" cy="10" r="1.05" fill="currentColor" stroke="none" />
-                    <path d="M7.5 14.25c1.05 1.5 2.7 2.35 4.5 2.35s3.45-.85 4.5-2.35" strokeLinecap="round" />
-                  </svg>
-                </button>
-                {showEmojiPicker && (
-                  <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
+              <div className={`composer-input-pill ${isVoiceRecording ? "composer-input-pill-recording" : ""}`}>
+                {!isVoiceRecording && (
+                  <>
+                    <button
+                      type="button"
+                      className="composer-emoji-btn"
+                      onClick={() => setShowEmojiPicker((v) => !v)}
+                      aria-label="Emoji"
+                    >
+                      <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                        <circle cx="12" cy="12" r="9.25" />
+                        <circle cx="8.7" cy="10" r="1.05" fill="currentColor" stroke="none" />
+                        <circle cx="15.3" cy="10" r="1.05" fill="currentColor" stroke="none" />
+                        <path d="M7.5 14.25c1.05 1.5 2.7 2.35 4.5 2.35s3.45-.85 4.5-2.35" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                    {showEmojiPicker && (
+                      <EmojiPicker onSelect={handleSelectEmoji} onClose={() => setShowEmojiPicker(false)} />
+                    )}
+                    <FileAttachButton onFileSelected={handleFileSelected} disabled={sending} />
+                    <input
+                      ref={composerInputRef}
+                      placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      disabled={sending}
+                    />
+                    {!activeGroup && (
+                      <button
+                        type="button"
+                        className={`composer-emoji-btn ${viewOnceArmed ? "armed" : ""}`}
+                        onClick={() => setViewOnceArmed((v) => !v)}
+                        aria-label="Toggle view-once"
+                        title="Send as view-once"
+                      >
+                        {viewOnceArmed ? "1️⃣" : "👁"}
+                      </button>
+                    )}
+                  </>
                 )}
-                <FileAttachButton onFileSelected={handleFileSelected} disabled={sending} />
-                <input
-                  ref={composerInputRef}
-                  placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  disabled={sending}
-                />
-                {!activeGroup && (
-                  <button
-                    type="button"
-                    className={`composer-emoji-btn ${viewOnceArmed ? "armed" : ""}`}
-                    onClick={() => setViewOnceArmed((v) => !v)}
-                    aria-label="Toggle view-once"
-                    title="Send as view-once"
-                  >
-                    {viewOnceArmed ? "1️⃣" : "👁"}
-                  </button>
-                )}
-                {draft.trim() ? (
+                {!isVoiceRecording && draft.trim() ? (
                   <button type="submit" className="composer-send-btn" disabled={sending}>
                     ➤
                   </button>
                 ) : (
-                  <VoiceRecorderButton onRecorded={handleVoiceRecorded} disabled={sending} />
+                  <VoiceRecorderButton
+                    onRecorded={handleVoiceRecorded}
+                    disabled={sending}
+                    onRecordingChange={setIsVoiceRecording}
+                  />
                 )}
               </div>
             </form>
