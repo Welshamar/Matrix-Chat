@@ -1,33 +1,25 @@
-import nodemailer, { Transporter } from "nodemailer";
+import { Resend } from "resend";
 import { env } from "../config/env";
 
-let transporter: Transporter | null = null;
+let client: Resend | null = null;
 
-function getTransporter(): Transporter {
-  if (!env.GMAIL_USER || !env.GMAIL_APP_PASSWORD) {
-    throw new Error("Email is not configured on this server (GMAIL_USER/GMAIL_APP_PASSWORD missing).");
+function getClient(): Resend {
+  if (!env.RESEND_API_KEY) {
+    throw new Error("Email is not configured on this server (RESEND_API_KEY missing).");
   }
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      // Explicit host/587/STARTTLS rather than the "service: gmail" shortcut
-      // (which defaults to port 465 implicit SSL) — some hosts silently
-      // drop outbound 465 while still allowing 587. Timeouts are set so a
-      // blocked port fails fast instead of hanging the request forever.
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: { user: env.GMAIL_USER, pass: env.GMAIL_APP_PASSWORD },
-      connectionTimeout: 10_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 10_000,
-    });
+  if (!client) {
+    client = new Resend(env.RESEND_API_KEY);
   }
-  return transporter;
+  return client;
 }
 
 export async function sendVerificationEmail(to: string, code: string): Promise<void> {
-  await getTransporter().sendMail({
-    from: `"Matrix Chat" <${env.GMAIL_USER}>`,
+  const { error } = await getClient().emails.send({
+    // onboarding@resend.dev is Resend's shared sandbox sender — it works
+    // without owning/verifying a domain, but until a real domain is
+    // verified in Resend it can only deliver to the Resend account's own
+    // (sign-up) email address, not to arbitrary registering users.
+    from: "Matrix Chat <onboarding@resend.dev>",
     to,
     subject: "Your Matrix Chat verification code",
     text: `Your verification code is ${code}. It expires in 10 minutes.`,
@@ -40,4 +32,8 @@ export async function sendVerificationEmail(to: string, code: string): Promise<v
       </div>
     `,
   });
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
