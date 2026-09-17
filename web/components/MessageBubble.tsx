@@ -127,6 +127,16 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
     }
   }
 
+  if (message.kind === "CALL") {
+    return (
+      <div className="call-log-row">
+        <span className="call-log-pill">
+          {message.body} · {formatTime(message.timestamp)}
+        </span>
+      </div>
+    );
+  }
+
   let body: React.ReactNode = message.body;
   let bubbleClass = `bubble ${message.direction}`;
 

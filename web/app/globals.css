@@ -648,6 +648,20 @@ input {
   justify-content: flex-end;
 }
 
+.call-log-row {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0;
+}
+
+.call-log-pill {
+  background: var(--bg-panel-elevated);
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 12px;
+}
+
 .bubble {
   max-width: 60%;
   padding: 8px 12px;
@@ -1526,6 +1540,17 @@ input {
   margin-top: 4px;
   font-size: 13.5px;
   color: var(--text-dim);
+}
+
+.call-audio-unlock {
+  margin-top: 14px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: 20px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .call-overlay-actions {

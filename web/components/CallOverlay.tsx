@@ -15,9 +15,11 @@ interface CallOverlayProps {
   duration: number;
   muted: boolean;
   error: string | null;
+  needsAudioUnlock: boolean;
   onAccept: () => void;
   onDecline: () => void;
   onToggleMute: () => void;
+  onUnlockAudio: () => void;
 }
 
 export function CallOverlay({
@@ -27,9 +29,11 @@ export function CallOverlay({
   duration,
   muted,
   error,
+  needsAudioUnlock,
   onAccept,
   onDecline,
   onToggleMute,
+  onUnlockAudio,
 }: CallOverlayProps) {
   const statusLine =
     status === "outgoing" ? "Calling..." : status === "incoming" ? "Incoming voice call" : formatDuration(duration);
@@ -43,6 +47,12 @@ export function CallOverlay({
         </div>
         <div className="call-overlay-name">{peerUsername}</div>
         <div className="call-overlay-status">{error ?? statusLine}</div>
+
+        {needsAudioUnlock && !error && (
+          <button type="button" className="call-audio-unlock" onClick={onUnlockAudio}>
+            🔊 Tap to hear audio
+          </button>
+        )}
 
         <div className="call-overlay-actions">
           {status === "incoming" ? (

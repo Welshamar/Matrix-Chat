@@ -14,7 +14,10 @@ import { FileMeta, ReplyRef } from "./messageEnvelope";
 export type MessageDirection = "in" | "out";
 export type MessageStatus = "PENDING" | "SENT" | "DELIVERED" | "READ";
 
-export type MessageKind = "TEXT" | "VOICE" | "FILE";
+// "CALL" is local-only — a call-outcome log entry (missed/no-answer/
+// duration) each side writes to its own history, never sent over the wire
+// (see logCallOutcome in app/chat/page.tsx and call.gateway.ts).
+export type MessageKind = "TEXT" | "VOICE" | "FILE" | "CALL";
 
 export interface LocalMessage {
   id: string;

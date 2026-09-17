@@ -31,6 +31,7 @@ import {
 } from "@/lib/socket";
 import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
+import { RingtonePlayer } from "@/lib/ringtone";
 import {
   appendMessage,
   clearGroupUnread,
@@ -107,6 +108,7 @@ export default function ChatPage() {
   const [callDuration, setCallDuration] = useState(0);
   const [callMuted, setCallMuted] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
+  const [callNeedsAudioUnlock, setCallNeedsAudioUnlock] = useState(false);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -124,6 +126,27 @@ export default function ChatPage() {
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const callErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callRingtoneRef = useRef<RingtonePlayer | null>(null);
+  // Which side of the call I was on originally — kept separately from
+  // callStatus because that transitions to "connected" once answered, and
+  // the call-log entry logged on teardown still needs to know.
+  const callDirectionRef = useRef<"outgoing" | "incoming" | null>(null);
+  // Mirrors of call state for the socket listeners registered once inside
+  // the init() effect below — those close over whichever render was active
+  // when they were registered, so they read refs instead of state directly.
+  const callStatusRef = useRef<CallStatus | null>(null);
+  const callDurationRef = useRef(0);
+  const callPeerRef = useRef<{ userId: string; username: string; avatarUrl?: string | null } | null>(null);
+
+  useEffect(() => {
+    callStatusRef.current = callStatus;
+  }, [callStatus]);
+  useEffect(() => {
+    callDurationRef.current = callDuration;
+  }, [callDuration]);
+  useEffect(() => {
+    callPeerRef.current = callPeer;
+  }, [callPeer]);
 
   useEffect(() => {
     activePeerRef.current = activePeer;
@@ -340,10 +363,13 @@ export default function ChatPage() {
           return;
         }
         callIdRef.current = evt.callId;
+        callDirectionRef.current = "incoming";
         pendingOfferRef.current = evt.sdp;
         setCallPeer({ userId: evt.fromUserId, username: evt.fromUsername });
         setCallError(null);
         setCallStatus("incoming");
+        if (!callRingtoneRef.current) callRingtoneRef.current = new RingtonePlayer();
+        callRingtoneRef.current.start("incoming");
       });
 
       socket.on("call:answered", async (evt: CallAnsweredEvent) => {
@@ -781,10 +807,57 @@ export default function ChatPage() {
   // the existing socket, addressed by userId exactly like signal:message;
   // the audio itself never touches the server (see lib/callClient.ts).
 
+  function formatCallDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  // Calls leave no server-side history (see call.gateway.ts), so each side
+  // logs its own local record of how the call ended — purely from what it
+  // already knows, no extra message needs to be sent to the peer.
+  async function logCallOutcome() {
+    if (!session) return;
+    const peer = callPeerRef.current;
+    const direction = callDirectionRef.current;
+    if (!peer || !direction) return;
+
+    const wasConnected = callStatusRef.current === "connected" || callDurationRef.current > 0;
+    let body: string;
+    if (wasConnected) {
+      body = `📞 Voice call · ${formatCallDuration(callDurationRef.current)}`;
+    } else if (direction === "outgoing") {
+      body = "📞 No answer";
+    } else {
+      body = "📞 Missed voice call";
+    }
+
+    const timestamp = new Date().toISOString();
+    await appendMessage(session.userId, peer.userId, {
+      id: crypto.randomUUID(),
+      direction: direction === "outgoing" ? "out" : "in",
+      body,
+      timestamp,
+      status: "DELIVERED",
+      kind: "CALL",
+    });
+    await upsertConversation(session.userId, { peerId: peer.userId, lastMessage: body, lastTimestamp: timestamp });
+    await refreshConversations(session.userId);
+    if (activePeerRef.current?.peerId === peer.userId) {
+      setMessages(await getMessages(session.userId, peer.userId));
+    }
+  }
+
   function attachRemoteStream(stream: MediaStream) {
+    callRingtoneRef.current?.stop();
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = stream;
-      remoteAudioRef.current.play().catch(() => {});
+      remoteAudioRef.current.play().catch(() => {
+        // Autoplay-with-sound is often blocked this soon after a user
+        // gesture (accepting/placing the call) — surface a one-tap unlock
+        // instead of silently leaving the call audible-but-silent.
+        setCallNeedsAudioUnlock(true);
+      });
     }
     if (callRingTimeoutRef.current) {
       clearTimeout(callRingTimeoutRef.current);
@@ -796,7 +869,15 @@ export default function ChatPage() {
     setCallStatus("connected");
   }
 
+  function handleUnlockCallAudio() {
+    remoteAudioRef.current?.play().catch(() => {});
+    setCallNeedsAudioUnlock(false);
+  }
+
   function resetCallState() {
+    callRingtoneRef.current?.stop();
+    logCallOutcome().catch((err) => console.error("Failed to log call outcome:", err));
+    callDirectionRef.current = null;
     callClientRef.current?.dispose();
     callClientRef.current = null;
     callIdRef.current = null;
@@ -810,12 +891,14 @@ export default function ChatPage() {
     setCallPeer(null);
     setCallDuration(0);
     setCallMuted(false);
+    setCallNeedsAudioUnlock(false);
   }
 
   // Used for both "the other side hung up/declined/failed" and "something
   // broke locally" — either way the call is over, so show why for a moment
   // and then tear the whole thing down.
   function failCall(message: string) {
+    callRingtoneRef.current?.stop();
     setCallError(message);
     if (callErrorTimeoutRef.current) clearTimeout(callErrorTimeoutRef.current);
     callErrorTimeoutRef.current = setTimeout(() => {
@@ -829,6 +912,7 @@ export default function ChatPage() {
     const socket = socketRef.current;
     const callId = crypto.randomUUID();
     callIdRef.current = callId;
+    callDirectionRef.current = "outgoing";
     setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
     setCallError(null);
     setCallStatus("outgoing");
@@ -848,6 +932,8 @@ export default function ChatPage() {
         failCall(ack.error ?? "Couldn't place the call.");
         return;
       }
+      if (!callRingtoneRef.current) callRingtoneRef.current = new RingtonePlayer();
+      callRingtoneRef.current.start("outgoing");
       callRingTimeoutRef.current = setTimeout(() => {
         socket.emit("call:end", { toUserId: peer.peerId, callId });
         failCall("No answer.");
@@ -859,6 +945,7 @@ export default function ChatPage() {
 
   async function handleAcceptCall() {
     if (!socketRef.current || !callPeer || !callIdRef.current || !pendingOfferRef.current) return;
+    callRingtoneRef.current?.stop();
     const socket = socketRef.current;
     const peerUserId = callPeer.userId;
     const callId = callIdRef.current;
@@ -1295,9 +1382,11 @@ export default function ChatPage() {
           duration={callDuration}
           muted={callMuted}
           error={callError}
+          needsAudioUnlock={callNeedsAudioUnlock}
           onAccept={handleAcceptCall}
           onDecline={handleDeclineCall}
           onToggleMute={toggleCallMute}
+          onUnlockAudio={handleUnlockCallAudio}
         />
       )}
       <audio ref={remoteAudioRef} autoPlay hidden />
@@ -1306,11 +1395,12 @@ export default function ChatPage() {
 }
 
 function summarize(
-  kind: "TEXT" | "VOICE" | "FILE",
+  kind: "TEXT" | "VOICE" | "FILE" | "CALL",
   viewOnce: boolean | undefined,
   plaintext: string,
   fileName?: string
 ): string {
+  if (kind === "CALL") return plaintext;
   if (kind === "FILE") return `📎 ${fileName ?? "Attachment"}`;
   if (kind === "VOICE") return "🎤 Voice message";
   if (viewOnce) return "📷 View once photo";

@@ -51,7 +51,9 @@ export class CallClient {
   }
 
   private async attachLocalAudio(pc: RTCPeerConnection): Promise<void> {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
     this.localStream = stream;
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
   }
