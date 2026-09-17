@@ -16,4 +16,8 @@ export const env = {
   // Not required() — missing this shouldn't crash the whole server, just
   // registration's verification-email step (see lib/mailer.ts).
   RESEND_API_KEY: process.env.RESEND_API_KEY,
+  // The full Firebase service account key JSON, as one string. Missing
+  // this only disables push notifications (see lib/push.ts) — everything
+  // else keeps working over the existing socket connection.
+  FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
 };

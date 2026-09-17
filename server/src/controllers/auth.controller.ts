@@ -264,3 +264,19 @@ export async function updateProfile(req: Request, res: Response): Promise<void> 
 
   res.json({ userId: user.id, username: user.username, avatarUrl: user.avatarUrl, statusText: user.statusText });
 }
+
+/** POST /api/auth/push-token — registers this device's FCM token so
+ *  signal.gateway.ts can push a notification when this user has no live
+ *  socket connection. One device at a time; re-registering overwrites it. */
+export async function registerPushToken(req: Request, res: Response): Promise<void> {
+  const userId = req.userId!;
+  const { fcmToken } = req.body as { fcmToken?: string };
+
+  if (!fcmToken) {
+    res.status(400).json({ error: "fcmToken is required." });
+    return;
+  }
+
+  await prisma.user.update({ where: { id: userId }, data: { fcmToken } });
+  res.json({ ok: true });
+}

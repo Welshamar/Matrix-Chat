@@ -5,6 +5,7 @@ import {
   login,
   lookupUsername,
   register,
+  registerPushToken,
   resendCode,
   resolveUserId,
   updateProfile,
@@ -20,5 +21,6 @@ router.post("/login", asyncHandler(login));
 router.get("/lookup/:username", requireAuth, asyncHandler(lookupUsername));
 router.get("/resolve/:userId", requireAuth, asyncHandler(resolveUserId));
 router.patch("/profile", requireAuth, asyncHandler(updateProfile));
+router.post("/push-token", requireAuth, asyncHandler(registerPushToken));
 
 export default router;

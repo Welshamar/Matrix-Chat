@@ -90,6 +90,13 @@ export function updateProfile(
   return authedRequest("/api/auth/profile", token, { method: "PATCH", body: JSON.stringify(patch) });
 }
 
+// Registers this device's FCM token so the server can push a notification
+// when a message arrives while the app has no live socket connection (see
+// call.gateway.ts's isUserOnline check, reused the same way here).
+export function registerPushToken(token: string, fcmToken: string): Promise<{ ok: true }> {
+  return authedRequest("/api/auth/push-token", token, { method: "POST", body: JSON.stringify({ fcmToken }) });
+}
+
 export interface InboxEnvelope {
   id: string;
   senderId: string;

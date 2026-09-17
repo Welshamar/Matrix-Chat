@@ -25,6 +25,11 @@ model User {
   registrationId Int?
   avatarUrl      String? // small base64 data: URL, client-resized — no object storage configured
   statusText     String? @default("Hey there! I am using Matrix Chat.")
+  // FCM registration token for the Android app, refreshed on every login —
+  // used to push a notification when a message arrives while this user has
+  // no live socket connection (see signal.gateway.ts). One device at a
+  // time; a second device's registration just overwrites this.
+  fcmToken       String?
   createdAt      DateTime @default(now())
 
   identityKey    IdentityKey?

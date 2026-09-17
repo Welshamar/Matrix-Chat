@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "797908114417",
+    "project_id": "matrix-chat-8785d",
+    "storage_bucket": "matrix-chat-8785d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:797908114417:android:9e48ab29c3ec8d64c70250",
+        "android_client_info": {
+          "package_name": "com.matrixchat.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJFBSG0VF_4plKA-9l3UHaalFEbgkk5uQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

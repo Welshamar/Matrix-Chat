@@ -1,6 +1,7 @@
 import { Server, Socket } from "socket.io";
 import { prisma } from "../db/prisma";
 import { verifySocketToken } from "../middleware/auth.middleware";
+import { sendPushNotification } from "../lib/push";
 import {
   SignalMessagePayload,
   SignalReceiptPayload,
@@ -117,6 +118,24 @@ export function registerSignalGateway(io: Server): void {
             groupId: message.groupId,
             timestamp: message.timestamp,
           });
+
+          // The recipient has no live socket to deliver over right now —
+          // it'll still be waiting in their inbox next time they connect,
+          // but a push is the only way to actually notify them meanwhile.
+          // Best-effort and fire-and-forget: never blocks the ack, and the
+          // notification body stays generic since the server has no
+          // plaintext to put in it either way.
+          if (!isUserOnline(payload.recipientId)) {
+            prisma.user
+              .findUnique({ where: { id: payload.recipientId }, select: { fcmToken: true } })
+              .then((recipient) => {
+                if (recipient?.fcmToken) {
+                  const senderUsername = (socket.data.username as string) ?? "Someone";
+                  return sendPushNotification(recipient.fcmToken, senderUsername, "Sent you a message");
+                }
+              })
+              .catch((err) => console.error("Failed to send push notification:", err));
+          }
 
           ack?.({ ok: true, messageId: message.id, clientMessageId: payload.clientMessageId });
         } catch {

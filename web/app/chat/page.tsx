@@ -11,6 +11,7 @@ import {
   getGroup,
   listGroups,
   lookupUsername,
+  registerPushToken,
   removeGroupMember,
   resolveUserId,
   updateGroupMemberRole,
@@ -35,6 +36,7 @@ import { RingtonePlayer } from "@/lib/ringtone";
 import { playReceivedTone, playSentTone } from "@/lib/messageTone";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
+import { registerForPushNotifications } from "@/lib/pushNotifications";
 import {
   appendMessage,
   clearGroupUnread,
@@ -330,6 +332,15 @@ export default function ChatPage() {
     }
     setSession(existing);
   }, [router]);
+
+  // Register this device for push once we know who's logged in — a no-op
+  // outside the native Android shell (see registerForPushNotifications).
+  useEffect(() => {
+    if (!session) return;
+    registerForPushNotifications((fcmToken) => {
+      registerPushToken(session.token, fcmToken).catch((err) => console.error("Failed to register push token:", err));
+    });
+  }, [session]);
 
   useEffect(() => {
     if (!session || initRan.current) return;

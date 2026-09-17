@@ -14,6 +14,7 @@
     "@capacitor/cli": "^8.5.2",
     "@capacitor/core": "^8.5.2",
     "@capacitor/filesystem": "^8.1.3",
+    "@capacitor/push-notifications": "^8.1.2",
     "@capacitor/share": "^8.0.2",
     "@privacyresearch/libsignal-protocol-typescript": "^0.0.16",
     "idb-keyval": "^6.2.1",
