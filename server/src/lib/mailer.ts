@@ -9,8 +9,17 @@ function getTransporter(): Transporter {
   }
   if (!transporter) {
     transporter = nodemailer.createTransport({
-      service: "gmail",
+      // Explicit host/587/STARTTLS rather than the "service: gmail" shortcut
+      // (which defaults to port 465 implicit SSL) — some hosts silently
+      // drop outbound 465 while still allowing 587. Timeouts are set so a
+      // blocked port fails fast instead of hanging the request forever.
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
       auth: { user: env.GMAIL_USER, pass: env.GMAIL_APP_PASSWORD },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 10_000,
     });
   }
   return transporter;
