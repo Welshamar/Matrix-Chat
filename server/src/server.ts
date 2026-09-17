@@ -2,6 +2,7 @@ import http from "http";
 import { Server } from "socket.io";
 import { createApp } from "./app";
 import { registerSignalGateway } from "./sockets/signal.gateway";
+import { registerCallGateway } from "./sockets/call.gateway";
 import { env } from "./config/env";
 
 // Last-resort net: every request/socket path already catches its own
@@ -23,6 +24,7 @@ const io = new Server(httpServer, {
 });
 
 registerSignalGateway(io);
+registerCallGateway(io);
 
 httpServer.listen(env.PORT, () => {
   console.log(`Matrix Chat signal relay listening on :${env.PORT}`);

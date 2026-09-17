@@ -56,3 +56,31 @@ export interface SocketAck {
   messageId?: string;
   clientMessageId?: string;
 }
+
+// WebRTC signaling (offer/answer SDP + ICE candidates) for 1:1 voice calls.
+// The server only relays these by userId, the same as it relays message
+// ciphertext — it never inspects them, and the actual audio never touches
+// the server at all (it flows directly between peers, or via a TURN relay,
+// as DTLS-SRTP-encrypted media once the call connects).
+export interface CallInvitePayload {
+  toUserId: string;
+  callId: string;
+  sdp: unknown;
+}
+
+export interface CallAnswerPayload {
+  toUserId: string;
+  callId: string;
+  sdp: unknown;
+}
+
+export interface CallIcePayload {
+  toUserId: string;
+  callId: string;
+  candidate: unknown;
+}
+
+export interface CallEndPayload {
+  toUserId: string;
+  callId: string;
+}

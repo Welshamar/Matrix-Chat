@@ -17,7 +17,11 @@ import {
   updateProfile,
 } from "@/lib/api";
 import {
+  CallAnsweredEvent,
+  CallEndedEvent,
+  CallIceEvent,
   connectSignalSocket,
+  IncomingCallEvent,
   InboundSignalMessage,
   sendReceipt,
   sendSignalMessage,
@@ -26,6 +30,7 @@ import {
   SignalViewedEvent,
 } from "@/lib/socket";
 import { SignalClient } from "@/lib/signal/signalClient";
+import { CallClient } from "@/lib/callClient";
 import {
   appendMessage,
   clearGroupUnread,
@@ -55,6 +60,7 @@ import { ProfileModal } from "@/components/ProfileModal";
 import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
 import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
+import { CallOverlay, CallStatus } from "@/components/CallOverlay";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 import { FileAttachButton } from "@/components/FileAttachButton";
 
@@ -94,6 +100,13 @@ export default function ChatPage() {
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
   const [showContactDetails, setShowContactDetails] = useState(false);
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
+  const [callStatus, setCallStatus] = useState<CallStatus | null>(null);
+  const [callPeer, setCallPeer] = useState<{ userId: string; username: string; avatarUrl?: string | null } | null>(
+    null
+  );
+  const [callDuration, setCallDuration] = useState(0);
+  const [callMuted, setCallMuted] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -104,6 +117,13 @@ export default function ChatPage() {
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const composerInputRef = useRef<HTMLInputElement | null>(null);
+  const callClientRef = useRef<CallClient | null>(null);
+  const callIdRef = useRef<string | null>(null);
+  const pendingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callErrorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     activePeerRef.current = activePeer;
@@ -209,7 +229,10 @@ export default function ChatPage() {
       socketRef.current = socket;
 
       socket.on("connect", () => setConnected(true));
-      socket.on("disconnect", () => setConnected(false));
+      socket.on("disconnect", () => {
+        setConnected(false);
+        if (callIdRef.current) failCall("Disconnected.");
+      });
 
       socket.on("signal:message", async (msg: InboundSignalMessage) => {
         try {
@@ -309,6 +332,44 @@ export default function ChatPage() {
         }
       });
 
+      socket.on("call:incoming", (evt: IncomingCallEvent) => {
+        // No call-waiting for this first pass — a second inbound call while
+        // one is already active/ringing is just declined as busy.
+        if (callIdRef.current) {
+          socket.emit("call:reject", { toUserId: evt.fromUserId, callId: evt.callId });
+          return;
+        }
+        callIdRef.current = evt.callId;
+        pendingOfferRef.current = evt.sdp;
+        setCallPeer({ userId: evt.fromUserId, username: evt.fromUsername });
+        setCallError(null);
+        setCallStatus("incoming");
+      });
+
+      socket.on("call:answered", async (evt: CallAnsweredEvent) => {
+        if (callIdRef.current !== evt.callId) return;
+        try {
+          await callClientRef.current?.applyAnswer(evt.sdp);
+        } catch {
+          failCall("Call failed to connect.");
+        }
+      });
+
+      socket.on("call:ice", (evt: CallIceEvent) => {
+        if (callIdRef.current !== evt.callId) return;
+        callClientRef.current?.addRemoteIceCandidate(evt.candidate);
+      });
+
+      socket.on("call:rejected", (evt: CallEndedEvent) => {
+        if (callIdRef.current !== evt.callId) return;
+        failCall("Call declined.");
+      });
+
+      socket.on("call:ended", (evt: CallEndedEvent) => {
+        if (callIdRef.current !== evt.callId) return;
+        resetCallState();
+      });
+
       // Sync our group roster from the server (covers being added to a
       // group, or a role change, since we last logged in).
       try {
@@ -401,6 +462,7 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
       socketRef.current?.disconnect();
+      callClientRef.current?.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
@@ -713,6 +775,124 @@ export default function ChatPage() {
     await sendViewed(socketRef.current, messageId);
   }
 
+  // --- Voice calls ---
+  // 1:1 only for this first pass — group calls would need an N-way mesh of
+  // peer connections, which is a much bigger step. Signaling (SDP/ICE) rides
+  // the existing socket, addressed by userId exactly like signal:message;
+  // the audio itself never touches the server (see lib/callClient.ts).
+
+  function attachRemoteStream(stream: MediaStream) {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = stream;
+      remoteAudioRef.current.play().catch(() => {});
+    }
+    if (callRingTimeoutRef.current) {
+      clearTimeout(callRingTimeoutRef.current);
+      callRingTimeoutRef.current = null;
+    }
+    setCallDuration(0);
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
+    setCallStatus("connected");
+  }
+
+  function resetCallState() {
+    callClientRef.current?.dispose();
+    callClientRef.current = null;
+    callIdRef.current = null;
+    pendingOfferRef.current = null;
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = null;
+    if (callRingTimeoutRef.current) clearTimeout(callRingTimeoutRef.current);
+    callRingTimeoutRef.current = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    setCallStatus(null);
+    setCallPeer(null);
+    setCallDuration(0);
+    setCallMuted(false);
+  }
+
+  // Used for both "the other side hung up/declined/failed" and "something
+  // broke locally" — either way the call is over, so show why for a moment
+  // and then tear the whole thing down.
+  function failCall(message: string) {
+    setCallError(message);
+    if (callErrorTimeoutRef.current) clearTimeout(callErrorTimeoutRef.current);
+    callErrorTimeoutRef.current = setTimeout(() => {
+      resetCallState();
+      setCallError(null);
+    }, 2500);
+  }
+
+  async function startVoiceCall(peer: Conversation) {
+    if (!socketRef.current || callIdRef.current) return;
+    const socket = socketRef.current;
+    const callId = crypto.randomUUID();
+    callIdRef.current = callId;
+    setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
+    setCallError(null);
+    setCallStatus("outgoing");
+
+    const client = new CallClient(socket, peer.peerId, callId, {
+      onRemoteStream: attachRemoteStream,
+      onFailure: failCall,
+    });
+    callClientRef.current = client;
+
+    try {
+      const offer = await client.startAsCaller();
+      const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+        socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer }, resolve);
+      });
+      if (!ack.ok) {
+        failCall(ack.error ?? "Couldn't place the call.");
+        return;
+      }
+      callRingTimeoutRef.current = setTimeout(() => {
+        socket.emit("call:end", { toUserId: peer.peerId, callId });
+        failCall("No answer.");
+      }, 30000);
+    } catch (err) {
+      failCall(err instanceof Error ? err.message : "Couldn't access your microphone.");
+    }
+  }
+
+  async function handleAcceptCall() {
+    if (!socketRef.current || !callPeer || !callIdRef.current || !pendingOfferRef.current) return;
+    const socket = socketRef.current;
+    const peerUserId = callPeer.userId;
+    const callId = callIdRef.current;
+    const offer = pendingOfferRef.current;
+
+    const client = new CallClient(socket, peerUserId, callId, {
+      onRemoteStream: attachRemoteStream,
+      onFailure: failCall,
+    });
+    callClientRef.current = client;
+
+    try {
+      const answer = await client.acceptAsCallee(offer);
+      pendingOfferRef.current = null;
+      socket.emit("call:answer", { toUserId: peerUserId, callId, sdp: answer });
+    } catch (err) {
+      failCall(err instanceof Error ? err.message : "Couldn't access your microphone.");
+    }
+  }
+
+  function handleDeclineCall() {
+    if (socketRef.current && callPeer && callIdRef.current) {
+      const event = callStatus === "incoming" ? "call:reject" : "call:end";
+      socketRef.current.emit(event, { toUserId: callPeer.userId, callId: callIdRef.current });
+    }
+    resetCallState();
+  }
+
+  function toggleCallMute() {
+    const next = !callMuted;
+    callClientRef.current?.setMuted(next);
+    setCallMuted(next);
+  }
+
   async function handleCreateGroup(name: string, memberUserIds: string[]) {
     if (!session) return;
     const created = await createGroupApi(session.token, name, memberUserIds);
@@ -777,6 +957,7 @@ export default function ChatPage() {
   }
 
   function handleLogout() {
+    callClientRef.current?.dispose();
     socketRef.current?.disconnect();
     clearSession();
     router.replace("/login");
@@ -946,6 +1127,20 @@ export default function ChatPage() {
                 </span>
               </div>
               <div className="chat-header-actions">
+                {!activeGroup && (
+                  <button
+                    type="button"
+                    className="chat-info-btn"
+                    onClick={() => activePeer && startVoiceCall(activePeer)}
+                    disabled={!!callStatus}
+                    aria-label="Voice call"
+                    title="Voice call"
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                      <path d="M6.6 10.8c1.4 2.8 3.7 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.2 1.1L6.6 10.8z" />
+                    </svg>
+                  </button>
+                )}
                 <button
                   type="button"
                   className={`chat-info-btn ${showContactDetails ? "active" : ""}`}
@@ -1091,6 +1286,21 @@ export default function ChatPage() {
           onClose={() => setShowGroupInfoModal(false)}
         />
       )}
+
+      {callStatus && callPeer && (
+        <CallOverlay
+          status={callStatus}
+          peerUsername={callPeer.username}
+          peerAvatarUrl={callPeer.avatarUrl}
+          duration={callDuration}
+          muted={callMuted}
+          error={callError}
+          onAccept={handleAcceptCall}
+          onDecline={handleDeclineCall}
+          onToggleMute={toggleCallMute}
+        />
+      )}
+      <audio ref={remoteAudioRef} autoPlay hidden />
     </div>
   );
 }

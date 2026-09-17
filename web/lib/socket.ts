@@ -31,6 +31,30 @@ interface SocketAck {
   messageId?: string;
 }
 
+export interface IncomingCallEvent {
+  fromUserId: string;
+  fromUsername: string;
+  callId: string;
+  sdp: RTCSessionDescriptionInit;
+}
+
+export interface CallAnsweredEvent {
+  fromUserId: string;
+  callId: string;
+  sdp: RTCSessionDescriptionInit;
+}
+
+export interface CallIceEvent {
+  fromUserId: string;
+  callId: string;
+  candidate: RTCIceCandidateInit;
+}
+
+export interface CallEndedEvent {
+  fromUserId: string;
+  callId: string;
+}
+
 export function connectSignalSocket(token: string): Socket {
   return io(API_URL, { auth: { token }, transports: ["websocket"] });
 }

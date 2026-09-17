@@ -1445,3 +1445,92 @@ input {
     width: 100%;
   }
 }
+
+/* --- Voice calls --- */
+
+.call-overlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  width: 320px;
+  max-width: 90%;
+  padding: 32px 24px;
+}
+
+.call-overlay-avatar-wrap {
+  position: relative;
+}
+
+.call-pulse::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  animation: call-pulse-ring 1.6s ease-out infinite;
+}
+
+@keyframes call-pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+.call-overlay-name {
+  margin-top: 16px;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.call-overlay-status {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.call-overlay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  margin-top: 32px;
+}
+
+.call-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.call-btn-accept {
+  background: #3ddc84;
+  color: #06280f;
+}
+
+.call-btn-reject {
+  background: var(--danger);
+  color: #2b0505;
+}
+
+.call-btn-mute {
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.call-btn-mute.armed {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}

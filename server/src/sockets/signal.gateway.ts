@@ -11,8 +11,12 @@ import {
 // userId -> connected socket ids, for presence/multi-tab awareness only.
 const onlineSockets = new Map<string, Set<string>>();
 
-function userRoom(userId: string): string {
+export function userRoom(userId: string): string {
   return `user:${userId}`;
+}
+
+export function isUserOnline(userId: string): boolean {
+  return (onlineSockets.get(userId)?.size ?? 0) > 0;
 }
 
 function isValidMessagePayload(p: unknown): p is SignalMessagePayload {
@@ -51,6 +55,17 @@ export function registerSignalGateway(io: Server): void {
   io.on("connection", (socket: Socket) => {
     const userId = socket.data.userId as string;
     socket.join(userRoom(userId));
+
+    // Looked up once per connection (not per call:invite) so a slow/flaky
+    // DB round trip can't fail an otherwise-healthy call — see call.gateway.ts.
+    prisma.user
+      .findUnique({ where: { id: userId }, select: { username: true } })
+      .then((user) => {
+        socket.data.username = user?.username ?? "Unknown";
+      })
+      .catch(() => {
+        socket.data.username = "Unknown";
+      });
 
     const sockets = onlineSockets.get(userId) ?? new Set<string>();
     sockets.add(socket.id);
