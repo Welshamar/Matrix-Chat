@@ -2,6 +2,13 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 import { env } from "../config/env";
 
+// Must match MESSAGE_CHANNEL_ID in web/lib/pushNotifications.ts (the
+// Android app creates this channel with high importance + default sound
+// on the client; a plain notification payload with no channelId lands in
+// FCM's own fallback channel, which is frequently silent — that mismatch
+// was the exact cause of the first test push arriving with no sound).
+const ANDROID_CHANNEL_ID = "messages";
+
 let ready: boolean | null = null;
 
 function ensureInitialized(): boolean {
@@ -37,7 +44,7 @@ export async function sendPushNotification(fcmToken: string, title: string, body
     await getMessaging().send({
       token: fcmToken,
       notification: { title, body },
-      android: { priority: "high" },
+      android: { priority: "high", notification: { channelId: ANDROID_CHANNEL_ID, sound: "default" } },
     });
   } catch (err) {
     console.error("Failed to send push notification:", err);
