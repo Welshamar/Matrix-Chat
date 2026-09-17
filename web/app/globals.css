@@ -172,6 +172,40 @@ input {
   font-size: 12px;
 }
 
+.notice-banner {
+  background: rgba(255, 122, 77, 0.12);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.auth-code-expiry {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: -8px 0 16px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: inherit;
+  padding: 0;
+  text-decoration: none;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* --- Avatars --- */
 
 .avatar {

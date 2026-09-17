@@ -12,6 +12,15 @@ datasource db {
 model User {
   id             String   @id @default(uuid())
   username       String   @unique
+  // Optional so existing accounts created before email verification was
+  // added aren't broken by this migration — login only enforces
+  // emailVerified for accounts that actually have an email on file.
+  email          String?  @unique
+  emailVerified  Boolean  @default(false)
+  // Single active 6-digit code, replaced on every register/resend — no
+  // history of past codes is kept, matching the code's 10-minute lifetime.
+  verificationCode          String?
+  verificationCodeExpiresAt DateTime?
   passwordHash   String
   registrationId Int?
   avatarUrl      String? // small base64 data: URL, client-resized — no object storage configured

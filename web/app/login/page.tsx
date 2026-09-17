@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { login } from "@/lib/api";
+import { EmailNotVerifiedError, login } from "@/lib/api";
 import { saveSession } from "@/lib/auth";
+import { VerifyCodeForm } from "@/components/VerifyCodeForm";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,6 +13,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [pendingUsername, setPendingUsername] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,7 +24,11 @@ export default function LoginPage() {
       saveSession(res);
       router.push("/chat");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed.");
+      if (err instanceof EmailNotVerifiedError) {
+        setPendingUsername(err.username);
+      } else {
+        setError(err instanceof Error ? err.message : "Login failed.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -32,40 +38,54 @@ export default function LoginPage() {
     <div className="auth-shell">
       <div className="auth-card">
         <h1 className="auth-title">🔒 Matrix Chat</h1>
-        <p className="auth-subtitle">End-to-end encrypted with the Signal Protocol.</p>
 
-        {error && <div className="error-banner">{error}</div>}
+        {pendingUsername ? (
+          <VerifyCodeForm
+            username={pendingUsername}
+            onVerified={(session) => {
+              saveSession(session);
+              router.push("/chat");
+            }}
+            onBack={() => setPendingUsername(null)}
+          />
+        ) : (
+          <>
+            <p className="auth-subtitle">End-to-end encrypted with the Signal Protocol.</p>
 
-        <form onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="username">Username</label>
-            <input
-              id="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              required
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-          <button className="btn-primary" type="submit" disabled={submitting}>
-            {submitting ? "Signing in..." : "Sign in"}
-          </button>
-        </form>
+            {error && <div className="error-banner">{error}</div>}
 
-        <p className="auth-switch">
-          No account? <Link href="/register">Create one</Link>
-        </p>
+            <form onSubmit={handleSubmit}>
+              <div className="field">
+                <label htmlFor="username">Username</label>
+                <input
+                  id="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  required
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="password">Password</label>
+                <input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+              <button className="btn-primary" type="submit" disabled={submitting}>
+                {submitting ? "Signing in..." : "Sign in"}
+              </button>
+            </form>
+
+            <p className="auth-switch">
+              No account? <Link href="/register">Create one</Link>
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

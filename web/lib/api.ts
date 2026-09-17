@@ -34,12 +34,45 @@ async function authedRequest<T>(path: string, token: string, init?: RequestInit)
   });
 }
 
-export function register(username: string, password: string): Promise<AuthResponse> {
-  return publicRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) });
+export interface RegisterPendingResponse {
+  username: string;
+  email: string;
+  message: string;
 }
 
-export function login(username: string, password: string): Promise<AuthResponse> {
-  return publicRequest("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+export function register(username: string, email: string, password: string): Promise<RegisterPendingResponse> {
+  return publicRequest("/api/auth/register", { method: "POST", body: JSON.stringify({ username, email, password }) });
+}
+
+// Thrown by login() specifically for the "needs verification" case, so the
+// UI can route to the code-entry step instead of showing a generic error.
+export class EmailNotVerifiedError extends Error {
+  constructor(public username: string) {
+    super("Email not verified.");
+    this.name = "EmailNotVerifiedError";
+  }
+}
+
+export async function login(username: string, password: string): Promise<AuthResponse> {
+  try {
+    return await publicRequest<AuthResponse>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "Email not verified.") {
+      throw new EmailNotVerifiedError(username);
+    }
+    throw err;
+  }
+}
+
+export function verifyEmail(username: string, code: string): Promise<AuthResponse> {
+  return publicRequest("/api/auth/verify-email", { method: "POST", body: JSON.stringify({ username, code }) });
+}
+
+export function resendCode(username: string): Promise<{ message: string }> {
+  return publicRequest("/api/auth/resend-code", { method: "POST", body: JSON.stringify({ username }) });
 }
 
 export function lookupUsername(token: string, username: string): Promise<UserProfile> {
