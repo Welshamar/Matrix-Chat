@@ -1,5 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
+import { saveDataUrlFile } from "@/lib/saveFile";
+
+// How long a just-opened view-once photo stays visible before collapsing
+// back to the "Opened" placeholder — long enough to actually look at it,
+// short enough that it reads as a genuine one-time reveal rather than a
+// message that just quietly stays viewable for the rest of the session.
+const VIEW_ONCE_DISPLAY_MS = 8000;
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -58,20 +65,40 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
   const [swiping, setSwiping] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   const dragState = useRef<{ pointerId: number; startX: number; startY: number; active: boolean; locked: boolean } | null>(
     null
   );
+  const revealTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveStatusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (revealTimeoutRef.current) clearTimeout(revealTimeoutRef.current);
+      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+    };
+  }, []);
 
   const isVoice = message.kind === "VOICE";
   const isFile = message.kind === "FILE" && !!message.file;
   const isViewOnce = !!message.viewOnce && !isVoice;
   const isIncomingUnopened = isViewOnce && message.direction === "in" && !message.viewOnceOpened && !revealed;
 
+  async function handleDownload() {
+    if (!message.file) return;
+    setSaveStatus("Saving...");
+    const result = await saveDataUrlFile(message.body, message.file.name);
+    setSaveStatus(result.message);
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+  }
+
   function handleTap() {
     if (!isIncomingUnopened) return;
     setRevealed(true);
     onOpenViewOnce(message.id);
+    revealTimeoutRef.current = setTimeout(() => setRevealed(false), VIEW_ONCE_DISPLAY_MS);
   }
 
   function handlePointerDown(e: React.PointerEvent) {
@@ -153,20 +180,48 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
     const file = message.file;
     if (file.mime.startsWith("image/")) {
       body = (
-        <a href={message.body} target="_blank" rel="noopener noreferrer" className="file-image-link">
-          <img src={message.body} alt={file.name} className="file-image" />
-        </a>
+        <div className="file-image-wrap">
+          <a href={message.body} target="_blank" rel="noopener noreferrer" className="file-image-link">
+            <img src={message.body} alt={file.name} className="file-image" />
+          </a>
+          <button
+            type="button"
+            className="file-image-download"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDownload();
+            }}
+            aria-label="Download image"
+            title="Download"
+          >
+            ⬇
+          </button>
+          {saveStatus && <div className="file-save-status">{saveStatus}</div>}
+        </div>
       );
       bubbleClass += " file-bubble file-bubble-image";
     } else {
       body = (
-        <a href={message.body} download={file.name} className="file-card">
+        <div className="file-card">
           <span className="file-card-icon">{fileIconFor(file.mime)}</span>
           <span className="file-card-info">
             <span className="file-card-name">{file.name}</span>
             <span className="file-card-size">{formatFileSize(file.size)}</span>
+            {saveStatus && <span className="file-save-status">{saveStatus}</span>}
           </span>
-        </a>
+          <button
+            type="button"
+            className="file-card-download"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDownload();
+            }}
+            aria-label="Download file"
+            title="Download"
+          >
+            ⬇
+          </button>
+        </div>
       );
       bubbleClass += " file-bubble";
     }

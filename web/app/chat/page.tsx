@@ -32,6 +32,7 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
 import { RingtonePlayer } from "@/lib/ringtone";
+import { playReceivedTone, playSentTone } from "@/lib/messageTone";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import {
@@ -365,6 +366,7 @@ export default function ChatPage() {
             signalMessageType: msg.signalMessageType,
           });
           const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
+          playReceivedTone();
 
           if (msg.groupId) {
             const group = await ensureGroup(
@@ -772,6 +774,7 @@ export default function ChatPage() {
       });
       await refreshGroups(session.userId);
       setMessages(await getMessages(session.userId, groupThreadKey(activeGroup.groupId)));
+      playSentTone();
       return;
     }
 
@@ -808,6 +811,7 @@ export default function ChatPage() {
     });
     await refreshConversations(session.userId);
     setMessages(await getMessages(session.userId, activePeer.peerId));
+    playSentTone();
   }
 
   // Label shown above the quoted snippet, from the replying user's point of

@@ -38,4 +38,12 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice calls: the WebView's getUserMedia() request is only ever
+         granted if the app both declares this and grants it at runtime in
+         MainActivity's WebChromeClient — see onPermissionRequest there. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Chat notifications (Android 13+ requires this to be requested at
+         runtime in addition to being declared here). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

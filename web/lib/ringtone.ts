@@ -1,8 +1,11 @@
-// Synthesized with Web Audio API rather than an audio file asset — a
-// two-tone beep repeated on an interval, loud enough to notice but not
-// harsh. "outgoing" (ringback, heard while calling) uses a lower tone than
-// "incoming" (heard while being called) so the two are distinguishable.
+// Synthesized with Web Audio API rather than an audio file asset — a short
+// melodic phrase repeated on an interval. "incoming" (being called) is a
+// bright ascending chime; "outgoing" (ringback, heard while calling) is a
+// softer descending phrase, so the two are clearly distinguishable by ear.
 export type RingtoneKind = "outgoing" | "incoming";
+
+const INCOMING_NOTES = [523.25, 659.25, 784.0]; // C5, E5, G5 — bright, ascending
+const OUTGOING_NOTES = [392.0, 329.63]; // G4, E4 — softer, descending
 
 export class RingtonePlayer {
   private ctx: AudioContext | null = null;
@@ -13,27 +16,32 @@ export class RingtonePlayer {
     const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new AudioContextCtor();
 
-    const frequencies = kind === "incoming" ? [480, 620] : [425, 425];
-    const playBeep = () => {
+    const notes = kind === "incoming" ? INCOMING_NOTES : OUTGOING_NOTES;
+    const noteGap = 0.16;
+    const noteLength = 0.5;
+
+    const playPhrase = () => {
       const ctx = this.ctx;
       if (!ctx) return;
       const now = ctx.currentTime;
-      frequencies.forEach((freq, i) => {
+      notes.forEach((freq, i) => {
+        const start = now + i * noteGap;
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
+        osc.type = "triangle";
         osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(0.12, now + 0.02);
-        gain.gain.linearRampToValueAtTime(0, now + 0.35);
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(0.1, start + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + noteLength);
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.start(now + i * 0.4);
-        osc.stop(now + i * 0.4 + 0.35);
+        osc.start(start);
+        osc.stop(start + noteLength);
       });
     };
 
-    playBeep();
-    this.intervalId = setInterval(playBeep, 2200);
+    playPhrase();
+    this.intervalId = setInterval(playPhrase, 2600);
   }
 
   stop(): void {
