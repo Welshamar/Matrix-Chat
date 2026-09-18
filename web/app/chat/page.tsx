@@ -993,31 +993,39 @@ export default function ChatPage() {
     };
   }
 
-  function handleReplyToMessage(message: LocalMessage) {
+  // Stable across renders (useCallback) so MessageBubble's memoization
+  // below actually works — otherwise a fresh function reference on every
+  // render (e.g. from a typing-indicator update, or the composer's own
+  // per-keystroke state change) would force every bubble in the thread to
+  // re-render regardless, which is what made typing feel laggy.
+  const handleReplyToMessage = useCallback((message: LocalMessage) => {
     setReplyingTo(message);
     composerInputRef.current?.focus();
-  }
+  }, []);
 
-  async function handleDeleteMessage(messageId: string) {
-    if (!session) return;
-    const threadKey = activeGroup ? groupThreadKey(activeGroup.groupId) : activePeer?.peerId;
-    if (!threadKey) return;
+  const handleDeleteMessage = useCallback(
+    async (messageId: string) => {
+      if (!session) return;
+      const threadKey = activeGroup ? groupThreadKey(activeGroup.groupId) : activePeer?.peerId;
+      if (!threadKey) return;
 
-    await deleteMessage(session.userId, threadKey, messageId);
-    const updated = await getMessages(session.userId, threadKey);
-    setMessages(updated);
+      await deleteMessage(session.userId, threadKey, messageId);
+      const updated = await getMessages(session.userId, threadKey);
+      setMessages(updated);
 
-    const last = updated[updated.length - 1];
-    const lastMessage = last ? summarize(last.kind ?? "TEXT", last.viewOnce, last.body, last.file?.name) : "";
-    const lastTimestamp = last ? last.timestamp : new Date().toISOString();
-    if (activeGroup) {
-      await upsertGroup(session.userId, { groupId: activeGroup.groupId, lastMessage, lastTimestamp });
-      await refreshGroups(session.userId);
-    } else if (activePeer) {
-      await upsertConversation(session.userId, { peerId: activePeer.peerId, lastMessage, lastTimestamp });
-      await refreshConversations(session.userId);
-    }
-  }
+      const last = updated[updated.length - 1];
+      const lastMessage = last ? summarize(last.kind ?? "TEXT", last.viewOnce, last.body, last.file?.name) : "";
+      const lastTimestamp = last ? last.timestamp : new Date().toISOString();
+      if (activeGroup) {
+        await upsertGroup(session.userId, { groupId: activeGroup.groupId, lastMessage, lastTimestamp });
+        await refreshGroups(session.userId);
+      } else if (activePeer) {
+        await upsertConversation(session.userId, { peerId: activePeer.peerId, lastMessage, lastTimestamp });
+        await refreshConversations(session.userId);
+      }
+    },
+    [session, activeGroup, activePeer, refreshGroups, refreshConversations]
+  );
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
@@ -1065,11 +1073,14 @@ export default function ChatPage() {
     }
   }
 
-  async function handleOpenViewOnce(messageId: string) {
-    if (!session || !activePeer || !socketRef.current) return;
-    await markViewOnceOpened(session.userId, activePeer.peerId, messageId);
-    await sendViewed(socketRef.current, messageId);
-  }
+  const handleOpenViewOnce = useCallback(
+    async (messageId: string) => {
+      if (!session || !activePeer || !socketRef.current) return;
+      await markViewOnceOpened(session.userId, activePeer.peerId, messageId);
+      await sendViewed(socketRef.current, messageId);
+    },
+    [session, activePeer]
+  );
 
   // --- Voice calls ---
   // 1:1 only for this first pass — group calls would need an N-way mesh of

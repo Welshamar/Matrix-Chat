@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
 import { saveDataUrlFile } from "@/lib/saveFile";
 
@@ -60,7 +60,12 @@ interface MessageBubbleProps {
   showSender?: boolean;
 }
 
-export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, showSender }: MessageBubbleProps) {
+// Memoized — the parent chat page is one large component that re-renders
+// on every keystroke and on unrelated state like typing indicators; without
+// this, every message bubble in the whole thread re-executes on every one
+// of those renders, which is what made typing feel laggy once the other
+// side's typing status started updating on top of your own keystrokes.
+function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSender }: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
@@ -326,3 +331,5 @@ export function MessageBubble({ message, onOpenViewOnce, onReply, onDelete, show
     </div>
   );
 }
+
+export const MessageBubble = memo(MessageBubbleImpl);
