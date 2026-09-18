@@ -96,3 +96,11 @@ export function sendViewed(socket: Socket, messageId: string): Promise<SocketAck
     socket.emit("signal:viewed", { messageId }, resolve);
   });
 }
+
+// Tells the server whether this tab/app instance is actually in the
+// foreground right now — a connected socket alone isn't enough to skip a
+// push notification, since the app can stay connected for a while after
+// being backgrounded (Android) or losing focus (a background browser tab).
+export function sendVisibility(socket: Socket, visible: boolean): void {
+  socket.emit("presence:visibility", { visible });
+}

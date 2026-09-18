@@ -27,6 +27,7 @@ import {
   sendReceipt,
   sendSignalMessage,
   sendViewed,
+  sendVisibility,
   SignalReceiptEvent,
   SignalViewedEvent,
 } from "@/lib/socket";
@@ -367,6 +368,31 @@ export default function ChatPage() {
     };
   }, [session]);
 
+  // Tells the server when this tab/app instance stops (or resumes) being
+  // the thing the user is actually looking at, so it knows a live socket
+  // isn't enough on its own to skip a push notification — see
+  // isUserVisible in signal.gateway.ts. document.visibilityState covers
+  // both a backgrounded Android app and an unfocused browser tab.
+  useEffect(() => {
+    function reportVisibility() {
+      const socket = socketRef.current;
+      if (socket) sendVisibility(socket, document.visibilityState === "visible");
+    }
+
+    document.addEventListener("visibilitychange", reportVisibility);
+    const handle = Capacitor.isNativePlatform()
+      ? CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+          const socket = socketRef.current;
+          if (socket) sendVisibility(socket, isActive);
+        })
+      : null;
+
+    return () => {
+      document.removeEventListener("visibilitychange", reportVisibility);
+      handle?.then((h) => h.remove());
+    };
+  }, []);
+
   useEffect(() => {
     if (!session || initRan.current) return;
     initRan.current = true;
@@ -389,7 +415,14 @@ export default function ChatPage() {
       const socket = connectSignalSocket(session.token);
       socketRef.current = socket;
 
-      socket.on("connect", () => setConnected(true));
+      socket.on("connect", () => {
+        setConnected(true);
+        // The server defaults a fresh socket to "visible" anyway, but a
+        // reconnect can happen while backgrounded (e.g. the socket dropped
+        // and came back while the app was still in the background) — make
+        // sure the server's view matches reality from the first moment.
+        sendVisibility(socket, document.visibilityState === "visible");
+      });
       socket.on("disconnect", () => {
         setConnected(false);
         if (callIdRef.current) failCall("Disconnected.");

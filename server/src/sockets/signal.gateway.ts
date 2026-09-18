@@ -12,12 +12,32 @@ import {
 // userId -> connected socket ids, for presence/multi-tab awareness only.
 const onlineSockets = new Map<string, Set<string>>();
 
+// socket.id -> whether that tab/app instance is currently in the
+// foreground. A connected socket alone isn't enough to skip a push
+// notification — the app can stay connected for a while after being
+// backgrounded (Android) or losing focus (a background browser tab) — so
+// this is tracked separately from onlineSockets and defaults to "visible"
+// until a socket says otherwise (see isUserVisible).
+const socketVisibility = new Map<string, boolean>();
+
 export function userRoom(userId: string): string {
   return `user:${userId}`;
 }
 
 export function isUserOnline(userId: string): boolean {
   return (onlineSockets.get(userId)?.size ?? 0) > 0;
+}
+
+// True only if at least one of the user's connected sockets is actually in
+// the foreground right now. Used to decide whether a push notification is
+// still needed even though the recipient technically has a live socket.
+export function isUserVisible(userId: string): boolean {
+  const sockets = onlineSockets.get(userId);
+  if (!sockets) return false;
+  for (const socketId of sockets) {
+    if (socketVisibility.get(socketId) !== false) return true;
+  }
+  return false;
 }
 
 function isValidMessagePayload(p: unknown): p is SignalMessagePayload {
@@ -119,13 +139,14 @@ export function registerSignalGateway(io: Server): void {
             timestamp: message.timestamp,
           });
 
-          // The recipient has no live socket to deliver over right now —
-          // it'll still be waiting in their inbox next time they connect,
-          // but a push is the only way to actually notify them meanwhile.
-          // Best-effort and fire-and-forget: never blocks the ack, and the
-          // notification body stays generic since the server has no
-          // plaintext to put in it either way.
-          if (!isUserOnline(payload.recipientId)) {
+          // The recipient either has no live socket, or has one but isn't
+          // actually looking at it right now (backgrounded app, unfocused
+          // tab) — either way a push is the only way to actually notify
+          // them. The message itself is already safely delivered/queued
+          // above regardless. Best-effort and fire-and-forget: never
+          // blocks the ack, and the notification body stays generic since
+          // the server has no plaintext to put in it either way.
+          if (!isUserVisible(payload.recipientId)) {
             prisma.user
               .findUnique({ where: { id: payload.recipientId }, select: { fcmToken: true } })
               .then((recipient) => {
@@ -200,7 +221,13 @@ export function registerSignalGateway(io: Server): void {
       }
     );
 
+    socket.on("presence:visibility", (payload: unknown) => {
+      const visible = typeof payload === "object" && payload !== null && "visible" in payload ? Boolean((payload as { visible: unknown }).visible) : true;
+      socketVisibility.set(socket.id, visible);
+    });
+
     socket.on("disconnect", () => {
+      socketVisibility.delete(socket.id);
       const set = onlineSockets.get(userId);
       set?.delete(socket.id);
       if (set && set.size === 0) onlineSockets.delete(userId);
