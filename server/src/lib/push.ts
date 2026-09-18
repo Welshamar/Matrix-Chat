@@ -7,7 +7,7 @@ import { env } from "../config/env";
 // on the client; a plain notification payload with no channelId lands in
 // FCM's own fallback channel, which is frequently silent — that mismatch
 // was the exact cause of the first test push arriving with no sound).
-const ANDROID_CHANNEL_ID = "messages";
+const ANDROID_CHANNEL_ID = "messages_v2";
 
 let ready: boolean | null = null;
 

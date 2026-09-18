@@ -33,6 +33,7 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
 import { RingtonePlayer } from "@/lib/ringtone";
+import { startCallAudioRouting, stopCallAudioRouting } from "@/lib/callAudio";
 import { playReceivedTone, playSentTone } from "@/lib/messageTone";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
@@ -334,6 +335,17 @@ export default function ChatPage() {
     setSession(existing);
   }, [router]);
 
+  // Paint whatever we already have on disk immediately, before touching
+  // the network at all — like WhatsApp, the chat list should never be
+  // blank just because the socket/inbox catch-up below hasn't finished
+  // (or can't, offline). The init effect below still reconciles with the
+  // server once it's able to.
+  useEffect(() => {
+    if (!session) return;
+    refreshConversations(session.userId);
+    refreshGroups(session.userId);
+  }, [session, refreshConversations, refreshGroups]);
+
   // Register this device for push once we know who's logged in — a no-op
   // outside the native Android shell (see registerForPushNotifications).
   useEffect(() => {
@@ -483,6 +495,7 @@ export default function ChatPage() {
         setCallPeer({ userId: evt.fromUserId, username: evt.fromUsername });
         setCallError(null);
         setCallStatus("incoming");
+        startCallAudioRouting();
         if (!callRingtoneRef.current) callRingtoneRef.current = new RingtonePlayer();
         callRingtoneRef.current.start("incoming");
       });
@@ -530,8 +543,17 @@ export default function ChatPage() {
       // Catch up on anything sent while we were offline. Each message is
       // handled independently — one bad/undecryptable message (e.g. a key
       // already consumed by an earlier interrupted attempt) must not take
-      // down the rest of the catch-up batch or block startup.
-      const pending = await fetchInbox(session.token);
+      // down the rest of the catch-up batch or block startup. And the
+      // fetch itself must not be fatal either — offline, this should just
+      // leave the already-rendered local cache alone rather than bounce
+      // the whole page back to a full-screen error (see the effect above
+      // that paints local data before any of this network work runs).
+      let pending: Awaited<ReturnType<typeof fetchInbox>> = [];
+      try {
+        pending = await fetchInbox(session.token);
+      } catch (err) {
+        console.error("Failed to fetch inbox:", err);
+      }
       for (const msg of pending) {
         try {
           const rawPlaintext = await client.decryptMessage(msg.senderId, {
@@ -993,6 +1015,7 @@ export default function ChatPage() {
 
   function resetCallState() {
     callRingtoneRef.current?.stop();
+    stopCallAudioRouting();
     logCallOutcome().catch((err) => console.error("Failed to log call outcome:", err));
     callDirectionRef.current = null;
     callClientRef.current?.dispose();
@@ -1033,6 +1056,7 @@ export default function ChatPage() {
     setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
     setCallError(null);
     setCallStatus("outgoing");
+    startCallAudioRouting();
 
     const client = new CallClient(socket, peer.peerId, callId, {
       onRemoteStream: attachRemoteStream,

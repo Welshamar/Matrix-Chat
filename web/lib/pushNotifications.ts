@@ -6,7 +6,16 @@ import { PushNotifications } from "@capacitor/push-notifications";
 // whatever default channel Android/FCM falls back to for a plain
 // notification payload — that default channel is frequently silent, which
 // is exactly the "notification with no sound" bug this fixes.
-export const MESSAGE_CHANNEL_ID = "messages";
+//
+// The "_v2" suffix matters: Android notification channel settings are
+// immutable from the app's side once a channel with a given id has ever
+// been created on a device — calling createChannel() again with a
+// different importance/sound/etc. is silently ignored if that id already
+// exists. Devices that installed an earlier build (before importance was
+// set to HIGH) are stuck with whatever the channel looked like back then
+// — sound only, no heads-up banner. Bumping the id forces every device to
+// get a fresh channel with the current (correct) settings.
+export const MESSAGE_CHANNEL_ID = "messages_v2";
 
 // No-ops entirely outside the native Android shell — a browser tab has no
 // FCM registration to do, and this stays purely additive to it.

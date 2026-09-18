@@ -123,12 +123,26 @@ export function VoiceRecorderButton({ onRecorded, disabled, onRecordingChange }:
     dragOriginRef.current = { x: e.clientX, y: e.clientY };
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 48000,
+        },
+      });
       streamRef.current = stream;
       chunksRef.current = [];
 
       const mimeType = pickMimeType();
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      // The browser/WebView default bitrate for voice is low enough to
+      // sound muffled — 64kbps mono opus is a clear, WhatsApp-comparable
+      // voice note without bloating the message size.
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        audioBitsPerSecond: 64_000,
+      });
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (ev) => {
