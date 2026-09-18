@@ -1367,7 +1367,8 @@ export default function ChatPage() {
     <div className={`chat-shell ${activePeer || activeGroup ? "has-active-thread" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand-bar">
-          <span className="sidebar-brand-logo" aria-hidden="true">🔒</span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="sidebar-brand-logo" src="/logo/matrix-chat-mark.svg" alt="" aria-hidden="true" />
           <span className="sidebar-brand-name">Matrix Chat</span>
         </div>
         <div className="sidebar-header">

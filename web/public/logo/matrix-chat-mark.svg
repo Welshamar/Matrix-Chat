@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">
+  <defs>
+    <linearGradient id="lineGrad" x1="0" y1="0" x2="108" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="0.5" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <radialGradient id="nodeGreen" cx="35%" cy="32%" r="70%">
+      <stop offset="0" stop-color="#c8fbe4"/>
+      <stop offset="1" stop-color="#10b981"/>
+    </radialGradient>
+    <radialGradient id="nodeBlue" cx="35%" cy="32%" r="70%">
+      <stop offset="0" stop-color="#cdedff"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </radialGradient>
+    <radialGradient id="nodeCenter" cx="35%" cy="32%" r="70%">
+      <stop offset="0" stop-color="#e7fff5"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </radialGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="2.6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#glow)">
+    <path d="M30,34 L30,78" stroke="url(#lineGrad)" stroke-width="3.4" stroke-linecap="round" fill="none"/>
+    <path d="M30,34 L42,46 L54,58" stroke="url(#lineGrad)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M54,58 L66,46 L78,34" stroke="url(#lineGrad)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M78,34 L78,78" stroke="url(#lineGrad)" stroke-width="3.4" stroke-linecap="round" fill="none"/>
+    <circle cx="30" cy="34" r="6.4" fill="url(#nodeGreen)"/>
+    <circle cx="30" cy="78" r="5.4" fill="url(#nodeGreen)"/>
+    <circle cx="42" cy="46" r="4.4" fill="url(#nodeGreen)"/>
+    <circle cx="54" cy="58" r="7.4" fill="url(#nodeCenter)"/>
+    <circle cx="66" cy="46" r="4.4" fill="url(#nodeBlue)"/>
+    <circle cx="78" cy="34" r="6.4" fill="url(#nodeBlue)"/>
+    <circle cx="78" cy="78" r="5.4" fill="url(#nodeBlue)"/>
+  </g>
+</svg>

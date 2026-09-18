@@ -33,7 +33,11 @@ export default function RegisterPage() {
   return (
     <div className="auth-shell">
       <div className="auth-card">
-        <h1 className="auth-title">🔒 Matrix Chat</h1>
+        <h1 className="auth-title">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="auth-title-logo" src="/logo/matrix-chat-mark.svg" alt="" aria-hidden="true" />
+          Matrix Chat
+        </h1>
 
         {pending ? (
           <VerifyCodeForm

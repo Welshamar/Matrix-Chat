@@ -69,6 +69,12 @@ input {
   gap: 8px;
 }
 
+.auth-title-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
 .auth-subtitle {
   color: var(--text-dim);
   font-size: 13px;
@@ -249,8 +255,9 @@ input {
 }
 
 .sidebar-brand-logo {
-  font-size: 19px;
-  line-height: 1;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
 }
 
 .sidebar-brand-name {
