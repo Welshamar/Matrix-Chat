@@ -158,7 +158,10 @@ export function registerSignalGateway(io: Server): void {
               .then((recipient) => {
                 if (recipient?.fcmToken) {
                   const senderUsername = (socket.data.username as string) ?? "Someone";
-                  return sendPushNotification(recipient.fcmToken, senderUsername, "Sent you a message");
+                  return sendPushNotification(recipient.fcmToken, senderUsername, "Sent you a message", {
+                    senderId: userId,
+                    groupId,
+                  });
                 }
               })
               .catch((err) => console.error("Failed to send push notification:", err));

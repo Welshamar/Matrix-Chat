@@ -29,12 +29,22 @@ function ensureInitialized(): boolean {
   }
 }
 
+export interface PushNotificationTarget {
+  senderId: string;
+  groupId?: string;
+}
+
 /** Fire-and-forget: pushes are a best-effort convenience notification, not
  *  part of the message-delivery guarantee (the message itself already sits
  *  in the inbox and is delivered over the socket the moment the recipient
  *  reconnects — see fetchInbox/messages.controller.ts). The push body is
- *  deliberately generic; the server has no plaintext to put in it anyway. */
-export async function sendPushNotification(fcmToken: string, title: string, body: string): Promise<void> {
+ *  deliberately generic; the server has no plaintext to put in it anyway.
+ *
+ *  `target` rides along as a plain (unencrypted) data payload — it's just
+ *  routing info (who this is from / which group), not message content —
+ *  so the client can open the right conversation when the notification is
+ *  tapped instead of whatever thread happened to be open last. */
+export async function sendPushNotification(fcmToken: string, title: string, body: string, target: PushNotificationTarget): Promise<void> {
   if (!ensureInitialized()) {
     console.error("Push notification skipped: Firebase Admin SDK not initialized (check FIREBASE_SERVICE_ACCOUNT_JSON).");
     return;
@@ -44,6 +54,7 @@ export async function sendPushNotification(fcmToken: string, title: string, body
     const messageId = await getMessaging().send({
       token: fcmToken,
       notification: { title, body },
+      data: target.groupId ? { senderId: target.senderId, groupId: target.groupId } : { senderId: target.senderId },
       android: { priority: "high", notification: { channelId: ANDROID_CHANNEL_ID, sound: "default" } },
     });
     console.log("Push notification sent:", messageId);

@@ -897,15 +897,11 @@ input {
   color: rgba(20, 23, 10, 0.6);
 }
 
-.bubble.out .file-card-icon {
-  background: rgba(20, 23, 10, 0.1);
-}
-
 .bubble.out .file-card-size {
   color: rgba(20, 23, 10, 0.6);
 }
 
-.bubble.out .file-card-download {
+.bubble.out .file-card-action-btn {
   background: rgba(20, 23, 10, 0.12);
   color: rgba(20, 23, 10, 0.85);
 }
@@ -1471,17 +1467,21 @@ input {
   object-fit: cover;
 }
 
-.file-image-download {
+.file-image-actions {
   position: absolute;
   top: 6px;
   right: 6px;
+  display: flex;
+  gap: 6px;
+}
+
+.file-image-action-btn {
   width: 28px;
   height: 28px;
   border-radius: 50%;
   border: none;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1492,21 +1492,25 @@ input {
   align-items: center;
   gap: 10px;
   padding: 6px 10px 6px 6px;
-  min-width: 200px;
+  min-width: 220px;
   color: inherit;
   background: none;
   border: none;
 }
 
-.file-card-download {
+.file-card-actions {
   flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+}
+
+.file-card-action-btn {
   width: 30px;
   height: 30px;
   border-radius: 50%;
   border: none;
   background: rgba(255, 255, 255, 0.08);
   color: inherit;
-  font-size: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1517,16 +1521,51 @@ input {
   color: var(--accent);
 }
 
-.file-card-icon {
+.file-card-badge {
   flex-shrink: 0;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: #fff;
+  border-radius: 9px;
+}
+
+.file-badge-pdf {
+  background: #e0534f;
+}
+
+.file-badge-doc {
+  background: #4a8fe2;
+}
+
+.file-badge-sheet {
+  background: #34a373;
+}
+
+.file-badge-archive {
+  background: #a56ee0;
+}
+
+.file-badge-apk {
+  background: #3ddc84;
+  color: #0b1a17;
+}
+
+.file-badge-audio {
+  background: #e0a53d;
+}
+
+.file-badge-video {
+  background: #e0538f;
+}
+
+.file-badge-generic {
+  background: #6b7685;
 }
 
 .file-card-info {

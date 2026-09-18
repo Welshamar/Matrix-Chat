@@ -128,6 +128,7 @@ export default function ChatPage() {
   const activePeerRef = useRef<Conversation | null>(null);
   const activeGroupRef = useRef<LocalGroup | null>(null);
   const groupsRef = useRef<LocalGroup[]>([]);
+  const conversationsRef = useRef<Conversation[]>([]);
   const initRan = useRef(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -178,6 +179,9 @@ export default function ChatPage() {
   useEffect(() => {
     groupsRef.current = groups;
   }, [groups]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   // --- Android hardware back button ---
   // Refs so the one-time listener registered below (see the Capacitor
@@ -369,16 +373,39 @@ export default function ChatPage() {
   // build fresh.
   useEffect(() => {
     if (!session) return;
+
+    // Opens whichever thread a tapped notification was actually about,
+    // instead of leaving the user on whatever thread happened to be open
+    // last. senderId/groupId ride along as a plain data payload on the
+    // push (see push.ts) — never message content, just routing.
+    async function openThreadFor(target: { senderId: string; groupId?: string }) {
+      if (target.groupId) {
+        const known = groupsRef.current.find((g) => g.groupId === target.groupId);
+        const group = known ?? (await ensureGroup(session!.userId, session!.token, target.groupId, "", new Date().toISOString()));
+        await handleSelectGroup(group);
+      } else {
+        const known = conversationsRef.current.find((c) => c.peerId === target.senderId);
+        const conv = known ?? (await ensureConversation(session!.userId, session!.token, target.senderId, "", new Date().toISOString()));
+        await handleSelectConversation(conv);
+      }
+    }
+
     const register = () => {
-      registerForPushNotifications((fcmToken) => {
-        registerPushToken(session.token, fcmToken).catch((err) => console.error("Failed to register push token:", err));
-      });
+      registerForPushNotifications(
+        (fcmToken) => {
+          registerPushToken(session.token, fcmToken).catch((err) => console.error("Failed to register push token:", err));
+        },
+        (target) => {
+          openThreadFor(target).catch((err) => console.error("Failed to open thread from notification:", err));
+        }
+      );
     };
     register();
     const handle = Capacitor.isNativePlatform() ? CapacitorApp.addListener("resume", register) : null;
     return () => {
       handle?.then((h) => h.remove());
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   // Tells the server when this tab/app instance stops (or resumes) being

@@ -17,9 +17,17 @@ import { PushNotifications } from "@capacitor/push-notifications";
 // get a fresh channel with the current (correct) settings.
 export const MESSAGE_CHANNEL_ID = "messages_v2";
 
+export interface NotificationTapTarget {
+  senderId: string;
+  groupId?: string;
+}
+
 // No-ops entirely outside the native Android shell — a browser tab has no
 // FCM registration to do, and this stays purely additive to it.
-export async function registerForPushNotifications(onToken: (token: string) => void): Promise<void> {
+export async function registerForPushNotifications(
+  onToken: (token: string) => void,
+  onNotificationTap: (target: NotificationTapTarget) => void
+): Promise<void> {
   if (!Capacitor.isNativePlatform()) return;
 
   try {
@@ -53,6 +61,17 @@ export async function registerForPushNotifications(onToken: (token: string) => v
     await PushNotifications.addListener("registration", (token) => onToken(token.value));
     await PushNotifications.addListener("registrationError", (err) => {
       console.error("Push registration error:", err);
+    });
+    // Fires both for a tap while the app is running and (once this listener
+    // is registered) for the tap that cold-launched the app in the first
+    // place — Capacitor buffers the launch notification until something is
+    // listening. Without this, opening the app from a notification just
+    // shows whatever thread was last open instead of the new message.
+    await PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
+      const data = action.notification?.data as { senderId?: string; groupId?: string } | undefined;
+      if (data?.senderId) {
+        onNotificationTap({ senderId: data.senderId, groupId: data.groupId || undefined });
+      }
     });
 
     await PushNotifications.register();

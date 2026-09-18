@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
-import { saveDataUrlFile } from "@/lib/saveFile";
+import { saveDataUrlFile, shareDataUrlFile } from "@/lib/saveFile";
 
 // How long a just-opened view-once photo stays visible before collapsing
 // back to the "Opened" placeholder — long enough to actually look at it,
@@ -19,14 +19,30 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function fileIconFor(mime: string): string {
-  if (mime.startsWith("video/")) return "🎬";
-  if (mime === "application/pdf") return "📕";
-  if (mime.includes("zip") || mime.includes("compressed")) return "🗜";
-  if (mime.startsWith("audio/")) return "🎵";
-  if (mime.includes("word") || mime.includes("document")) return "📝";
-  if (mime.includes("sheet") || mime.includes("excel")) return "📊";
-  return "📄";
+interface FileBadge {
+  label: string;
+  colorClass: string;
+}
+
+// WhatsApp's document card badges the file with its extension on a colored
+// square rather than a generic paper icon — the extension (from the
+// filename, which is more reliable than a possibly-generic MIME type like
+// application/octet-stream) reads as useful information at a glance.
+function fileBadgeFor(filename: string, mime: string): FileBadge {
+  const ext = (filename.split(".").pop() || "").toUpperCase().slice(0, 4);
+  if (mime.startsWith("video/")) return { label: ext || "VID", colorClass: "file-badge-video" };
+  if (mime.startsWith("audio/")) return { label: ext || "AUD", colorClass: "file-badge-audio" };
+  if (mime === "application/pdf") return { label: "PDF", colorClass: "file-badge-pdf" };
+  if (mime.includes("word") || mime.includes("document")) return { label: ext || "DOC", colorClass: "file-badge-doc" };
+  if (mime.includes("sheet") || mime.includes("excel")) return { label: ext || "XLS", colorClass: "file-badge-sheet" };
+  // Checked before the generic archive case below — Android's own MIME
+  // type for an APK ("application/vnd.android.package-archive") contains
+  // the substring "archive", which would otherwise misclassify it as ZIP.
+  if (mime.includes("android.package-archive") || ext === "APK") return { label: "APK", colorClass: "file-badge-apk" };
+  if (mime.includes("zip") || mime.includes("compressed") || mime.includes("archive")) {
+    return { label: ext || "ZIP", colorClass: "file-badge-archive" };
+  }
+  return { label: ext || "FILE", colorClass: "file-badge-generic" };
 }
 
 const EMOJI_ONLY_MAX_CHARS = 12;
@@ -50,6 +66,27 @@ function StatusTick({ status }: { status: LocalMessage["status"] }) {
   if (status === "SENT") return <span className="tick">✓</span>;
   if (status === "DELIVERED") return <span className="tick">✓✓</span>;
   return <span className="tick tick-read">✓✓</span>; // READ
+}
+
+function ShareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <circle cx="18" cy="5.5" r="2.5" />
+      <circle cx="6" cy="12" r="2.5" />
+      <circle cx="18" cy="18.5" r="2.5" />
+      <path d="M8.2 10.7l7.6-4.2M8.2 13.3l7.6 4.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M12 3.5v11.5" strokeLinecap="round" />
+      <path d="M7.5 11l4.5 4.5 4.5-4.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 19.5h14" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 interface MessageBubbleProps {
@@ -94,9 +131,23 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSen
     if (!message.file) return;
     setSaveStatus("Saving...");
     const result = await saveDataUrlFile(message.body, message.file.name);
-    setSaveStatus(result.message);
-    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
-    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+    if (result.message) {
+      setSaveStatus(result.message);
+      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+      saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+    } else {
+      setSaveStatus(null);
+    }
+  }
+
+  async function handleShare() {
+    if (!message.file) return;
+    const result = await shareDataUrlFile(message.body, message.file.name);
+    if (!result.ok && result.message) {
+      setSaveStatus(result.message);
+      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+      saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+    }
   }
 
   function handleTap() {
@@ -189,43 +240,72 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSen
           <a href={message.body} target="_blank" rel="noopener noreferrer" className="file-image-link">
             <img src={message.body} alt={file.name} className="file-image" />
           </a>
-          <button
-            type="button"
-            className="file-image-download"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDownload();
-            }}
-            aria-label="Download image"
-            title="Download"
-          >
-            ⬇
-          </button>
+          <div className="file-image-actions">
+            <button
+              type="button"
+              className="file-image-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleShare();
+              }}
+              aria-label="Share image"
+              title="Share"
+            >
+              <ShareIcon />
+            </button>
+            <button
+              type="button"
+              className="file-image-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDownload();
+              }}
+              aria-label="Download image"
+              title="Download"
+            >
+              <DownloadIcon />
+            </button>
+          </div>
           {saveStatus && <div className="file-save-status">{saveStatus}</div>}
         </div>
       );
       bubbleClass += " file-bubble file-bubble-image";
     } else {
+      const badge = fileBadgeFor(file.name, file.mime);
       body = (
         <div className="file-card">
-          <span className="file-card-icon">{fileIconFor(file.mime)}</span>
+          <span className={`file-card-badge ${badge.colorClass}`}>{badge.label}</span>
           <span className="file-card-info">
             <span className="file-card-name">{file.name}</span>
             <span className="file-card-size">{formatFileSize(file.size)}</span>
             {saveStatus && <span className="file-save-status">{saveStatus}</span>}
           </span>
-          <button
-            type="button"
-            className="file-card-download"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleDownload();
-            }}
-            aria-label="Download file"
-            title="Download"
-          >
-            ⬇
-          </button>
+          <span className="file-card-actions">
+            <button
+              type="button"
+              className="file-card-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleShare();
+              }}
+              aria-label="Share file"
+              title="Share"
+            >
+              <ShareIcon />
+            </button>
+            <button
+              type="button"
+              className="file-card-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDownload();
+              }}
+              aria-label="Download file"
+              title="Download"
+            >
+              <DownloadIcon />
+            </button>
+          </span>
         </div>
       );
       bubbleClass += " file-bubble";
