@@ -50,6 +50,16 @@ export interface SignalViewedPayload {
   messageId: string;
 }
 
+/** Composing-state presence signal — not message content, so unlike
+ *  SignalMessagePayload this carries no ciphertext and needs no per-member
+ *  encryption; the server fans a group typing event out to every member
+ *  itself instead of the client sending one copy per member. */
+export interface SignalTypingPayload {
+  recipientId?: string;
+  groupId?: string;
+  typing: boolean;
+}
+
 export interface SocketAck {
   ok: boolean;
   error?: string;

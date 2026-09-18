@@ -510,6 +510,11 @@ input {
   text-overflow: ellipsis;
 }
 
+.conversation-item .preview-typing {
+  color: var(--success);
+  font-weight: 500;
+}
+
 .conversation-meta-col {
   display: flex;
   flex-direction: column;

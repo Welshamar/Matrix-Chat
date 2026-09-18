@@ -26,9 +26,11 @@ import {
   InboundSignalMessage,
   sendReceipt,
   sendSignalMessage,
+  sendTyping,
   sendViewed,
   sendVisibility,
   SignalReceiptEvent,
+  SignalTypingEvent,
   SignalViewedEvent,
 } from "@/lib/socket";
 import { SignalClient } from "@/lib/signal/signalClient";
@@ -95,6 +97,9 @@ export default function ChatPage() {
   const [activePeer, setActivePeer] = useState<Conversation | null>(null);
   const [activeGroup, setActiveGroup] = useState<LocalGroup | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
+  // Thread key (peerId for 1:1, groupId for a group) -> usernames currently
+  // composing in that thread. A ThreadView's `key` uses this same scheme.
+  const [typingByThread, setTypingByThread] = useState<Record<string, string[]>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchError, setSearchError] = useState<string | null>(null);
   const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
@@ -139,6 +144,14 @@ export default function ChatPage() {
   // callStatus because that transitions to "connected" once answered, and
   // the call-log entry logged on teardown still needs to know.
   const callDirectionRef = useRef<"outgoing" | "incoming" | null>(null);
+  // Who we last told "I'm typing" — cleared (and the other side told
+  // "stopped") after a few seconds of no keystrokes, on send, or when the
+  // active thread changes.
+  const typingTargetRef = useRef<{ recipientId?: string; groupId?: string } | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-thread safety-net timers that clear a typing indicator if a
+  // "stopped" event never arrives (dropped connection, killed app, etc).
+  const typingClearTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // Mirrors of call state for the socket listeners registered once inside
   // the init() effect below — those close over whichever render was active
   // when they were registered, so they read refs instead of state directly.
@@ -527,6 +540,37 @@ export default function ChatPage() {
         }
       });
 
+      socket.on("signal:typing", (evt: SignalTypingEvent) => {
+        const threadKey = evt.groupId ?? evt.from;
+        const existingTimer = typingClearTimersRef.current.get(threadKey);
+        if (existingTimer) clearTimeout(existingTimer);
+        typingClearTimersRef.current.delete(threadKey);
+
+        if (evt.typing) {
+          setTypingByThread((prev) => {
+            const current = prev[threadKey] ?? [];
+            if (current.includes(evt.username)) return prev;
+            return { ...prev, [threadKey]: [...current, evt.username] };
+          });
+          // Safety net in case a "stopped typing" event never arrives —
+          // matches the sender's own inactivity timeout, plus a margin.
+          const timer = setTimeout(() => {
+            setTypingByThread((prev) => {
+              const current = prev[threadKey];
+              if (!current?.length) return prev;
+              return { ...prev, [threadKey]: current.filter((u) => u !== evt.username) };
+            });
+          }, 5000);
+          typingClearTimersRef.current.set(threadKey, timer);
+        } else {
+          setTypingByThread((prev) => {
+            const current = prev[threadKey];
+            if (!current?.length) return prev;
+            return { ...prev, [threadKey]: current.filter((u) => u !== evt.username) };
+          });
+        }
+      });
+
       socket.on("call:incoming", (evt: IncomingCallEvent) => {
         // No call-waiting for this first pass — a second inbound call while
         // one is already active/ringing is just declined as busy.
@@ -713,6 +757,7 @@ export default function ChatPage() {
 
   async function handleSelectConversation(conv: Conversation) {
     if (!session) return;
+    stopTypingIfNeeded();
     setActiveGroup(null);
     setActivePeer(conv);
     setShowEmojiPicker(false);
@@ -728,6 +773,7 @@ export default function ChatPage() {
 
   async function handleSelectGroup(group: LocalGroup) {
     if (!session) return;
+    stopTypingIfNeeded();
     setActivePeer(null);
     setActiveGroup(group);
     setShowEmojiPicker(false);
@@ -893,6 +939,45 @@ export default function ChatPage() {
     playSentTone();
   }
 
+  function stopTypingIfNeeded() {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    const target = typingTargetRef.current;
+    if (target && socketRef.current) {
+      sendTyping(socketRef.current, target, false);
+    }
+    typingTargetRef.current = null;
+  }
+
+  function handleDraftChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const value = e.target.value;
+    setDraft(value);
+
+    const socket = socketRef.current;
+    const target = activeGroup ? { groupId: activeGroup.groupId } : activePeer ? { recipientId: activePeer.peerId } : null;
+    if (!socket || !target) return;
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+    if (value.trim()) {
+      // Only announce "started typing" once per burst of keystrokes — each
+      // keystroke just refreshes the idle timeout below rather than
+      // re-emitting the event.
+      if (!typingTargetRef.current) {
+        sendTyping(socket, target, true);
+        typingTargetRef.current = target;
+      }
+      typingTimeoutRef.current = setTimeout(() => {
+        sendTyping(socket, target, false);
+        typingTargetRef.current = null;
+      }, 3000);
+    } else {
+      stopTypingIfNeeded();
+    }
+  }
+
   // Label shown above the quoted snippet, from the replying user's point of
   // view: "You" for their own earlier message, otherwise the original sender.
   function replySenderLabelFor(m: LocalMessage): string {
@@ -939,6 +1024,7 @@ export default function ChatPage() {
     const text = draft.trim();
     if (!text || sending) return;
 
+    stopTypingIfNeeded();
     setSending(true);
     try {
       const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
@@ -1358,7 +1444,10 @@ export default function ChatPage() {
                 : "No matches."}
             </div>
           ) : (
-            threadViews.map((t) => (
+            threadViews.map((t) => {
+              const typingUsers = typingByThread[t.key];
+              const isTyping = !!typingUsers?.length;
+              return (
               <div
                 key={t.key}
                 className={`conversation-item ${activeKey === t.key ? "active" : ""}`}
@@ -1370,7 +1459,13 @@ export default function ChatPage() {
                     {t.isGroup && "👥 "}
                     {t.name}
                   </span>
-                  <span className="preview">{t.lastMessage || "No messages yet"}</span>
+                  {isTyping ? (
+                    <span className="preview preview-typing">
+                      {t.isGroup ? `${typingUsers.join(", ")} typing...` : "typing..."}
+                    </span>
+                  ) : (
+                    <span className="preview">{t.lastMessage || "No messages yet"}</span>
+                  )}
                 </span>
                 <span className="conversation-meta-col">
                   <button
@@ -1383,7 +1478,8 @@ export default function ChatPage() {
                   {!!t.unreadCount && <span className="unread-badge">{t.unreadCount}</span>}
                 </span>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </aside>
@@ -1407,7 +1503,13 @@ export default function ChatPage() {
                 <span className="chat-header-text">
                   <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
                   <span className="lock">
-                    {activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+                    {(() => {
+                      const typingUsers = typingByThread[activeKey ?? ""];
+                      if (typingUsers?.length) {
+                        return activeGroup ? `${typingUsers.join(", ")} typing...` : "typing...";
+                      }
+                      return activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted";
+                    })()}
                   </span>
                 </span>
               </div>
@@ -1497,7 +1599,7 @@ export default function ChatPage() {
                       ref={composerInputRef}
                       placeholder={viewOnceArmed ? "View-once message..." : "Type a message"}
                       value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
+                      onChange={handleDraftChange}
                       disabled={sending}
                     />
                     {!activeGroup && (

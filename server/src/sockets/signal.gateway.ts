@@ -5,6 +5,7 @@ import { sendPushNotification } from "../lib/push";
 import {
   SignalMessagePayload,
   SignalReceiptPayload,
+  SignalTypingPayload,
   SignalViewedPayload,
   SocketAck,
 } from "../types/signal.types";
@@ -58,6 +59,11 @@ function isValidReceiptPayload(p: unknown): p is SignalReceiptPayload {
 function isValidViewedPayload(p: unknown): p is SignalViewedPayload {
   const v = p as Partial<SignalViewedPayload> | null;
   return !!(v && typeof v.messageId === "string");
+}
+
+function isValidTypingPayload(p: unknown): p is SignalTypingPayload {
+  const t = p as Partial<SignalTypingPayload> | null;
+  return !!(t && typeof t.typing === "boolean" && (typeof t.recipientId === "string" || typeof t.groupId === "string"));
 }
 
 /** Wires up the zero-knowledge relay: the server persists and forwards
@@ -220,6 +226,44 @@ export function registerSignalGateway(io: Server): void {
         }
       }
     );
+
+    // Composing-state presence, not message content — no persistence, no
+    // ack needed, and (unlike signal:message) no per-member ciphertext, so
+    // for a group the server fans a single event out to every other
+    // member itself instead of the client sending one copy per member.
+    socket.on("signal:typing", async (payload: unknown) => {
+      if (!isValidTypingPayload(payload)) return;
+
+      const username = (socket.data.username as string) ?? "Someone";
+      try {
+        if (payload.groupId) {
+          const members = await prisma.groupMember.findMany({
+            where: { groupId: payload.groupId },
+            select: { userId: true },
+          });
+          const isMember = members.some((m) => m.userId === userId);
+          if (!isMember) return;
+
+          for (const member of members) {
+            if (member.userId === userId) continue;
+            io.to(userRoom(member.userId)).emit("signal:typing", {
+              from: userId,
+              username,
+              groupId: payload.groupId,
+              typing: payload.typing,
+            });
+          }
+        } else if (payload.recipientId) {
+          io.to(userRoom(payload.recipientId)).emit("signal:typing", {
+            from: userId,
+            username,
+            typing: payload.typing,
+          });
+        }
+      } catch (err) {
+        console.error("Failed to relay typing status:", err);
+      }
+    });
 
     socket.on("presence:visibility", (payload: unknown) => {
       const visible = typeof payload === "object" && payload !== null && "visible" in payload ? Boolean((payload as { visible: unknown }).visible) : true;

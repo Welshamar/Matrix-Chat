@@ -25,6 +25,13 @@ export interface SignalViewedEvent {
   from: string;
 }
 
+export interface SignalTypingEvent {
+  from: string;
+  username: string;
+  groupId?: string;
+  typing: boolean;
+}
+
 interface SocketAck {
   ok: boolean;
   error?: string;
@@ -103,4 +110,12 @@ export function sendViewed(socket: Socket, messageId: string): Promise<SocketAck
 // being backgrounded (Android) or losing focus (a background browser tab).
 export function sendVisibility(socket: Socket, visible: boolean): void {
   socket.emit("presence:visibility", { visible });
+}
+
+// Composing-state presence — not message content, so it's sent in the
+// clear (like receipts) rather than through the Signal ratchet. Fire and
+// forget: a dropped typing ping just means the indicator stays hidden a
+// little longer, never anything worse.
+export function sendTyping(socket: Socket, target: { recipientId?: string; groupId?: string }, typing: boolean): void {
+  socket.emit("signal:typing", { ...target, typing });
 }
