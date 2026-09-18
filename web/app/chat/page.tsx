@@ -136,6 +136,15 @@ export default function ChatPage() {
   const callClientRef = useRef<CallClient | null>(null);
   const callIdRef = useRef<string | null>(null);
   const pendingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
+  // ICE candidates routinely arrive before the callee taps Accept (gathering
+  // starts the moment the caller creates their offer, well before a human
+  // notices the ring) — callClientRef.current is still null at that point,
+  // so callClientRef.current?.addRemoteIceCandidate(...) would silently
+  // drop every one of them with no queuing at all. Buffered here instead,
+  // and flushed into the CallClient the moment it's created in
+  // handleAcceptCall.
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const callDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -462,10 +471,28 @@ export default function ChatPage() {
         // and came back while the app was still in the background) — make
         // sure the server's view matches reality from the first moment.
         sendVisibility(socket, document.visibilityState === "visible");
+        if (callDisconnectTimeoutRef.current) {
+          clearTimeout(callDisconnectTimeoutRef.current);
+          callDisconnectTimeoutRef.current = null;
+        }
       });
       socket.on("disconnect", () => {
         setConnected(false);
-        if (callIdRef.current) failCall("Disconnected.");
+        // WebRTC's actual audio connection doesn't depend on this
+        // signaling socket once the call is negotiated — it's a direct
+        // (or TURN-relayed) peer-to-peer media session. A signaling drop
+        // (tab backgrounded, brief network blip — socket.io's own ping
+        // timeout is tight enough now that ordinary backgrounding can
+        // trigger this) doesn't mean the call itself is dead, so this
+        // waits for socket.io's automatic reconnect before giving up,
+        // instead of killing an otherwise-healthy call immediately.
+        if (callIdRef.current) {
+          if (callDisconnectTimeoutRef.current) clearTimeout(callDisconnectTimeoutRef.current);
+          callDisconnectTimeoutRef.current = setTimeout(() => {
+            callDisconnectTimeoutRef.current = null;
+            if (callIdRef.current) failCall("Disconnected.");
+          }, 8000);
+        }
       });
 
       socket.on("signal:message", async (msg: InboundSignalMessage) => {
@@ -627,7 +654,11 @@ export default function ChatPage() {
 
       socket.on("call:ice", (evt: CallIceEvent) => {
         if (callIdRef.current !== evt.callId) return;
-        callClientRef.current?.addRemoteIceCandidate(evt.candidate);
+        if (callClientRef.current) {
+          callClientRef.current.addRemoteIceCandidate(evt.candidate);
+        } else {
+          pendingIceCandidatesRef.current.push(evt.candidate);
+        }
       });
 
       socket.on("call:rejected", (evt: CallEndedEvent) => {
@@ -1191,6 +1222,9 @@ export default function ChatPage() {
     callClientRef.current = null;
     callIdRef.current = null;
     pendingOfferRef.current = null;
+    pendingIceCandidatesRef.current = [];
+    if (callDisconnectTimeoutRef.current) clearTimeout(callDisconnectTimeoutRef.current);
+    callDisconnectTimeoutRef.current = null;
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     callTimerRef.current = null;
     if (callRingTimeoutRef.current) clearTimeout(callRingTimeoutRef.current);
@@ -1239,9 +1273,14 @@ export default function ChatPage() {
       // even connected.
       await startCallAudioRouting();
       const offer = await client.startAsCaller();
+      // The call may have been cancelled locally while we were still
+      // waiting on mic permission above — don't resurrect it by inviting
+      // the other side to a call we've already torn down.
+      if (callIdRef.current !== callId) return;
       const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
         socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer }, resolve);
       });
+      if (callIdRef.current !== callId) return;
       if (!ack.ok) {
         failCall(ack.error ?? "Couldn't place the call.");
         return;
@@ -1270,6 +1309,16 @@ export default function ChatPage() {
       onFailure: failCall,
     });
     callClientRef.current = client;
+
+    // Flush anything that arrived while we were still ringing — see the
+    // call:ice handler above. addRemoteIceCandidate queues internally if
+    // the remote description isn't set yet, so this is safe to do before
+    // acceptAsCallee below.
+    const buffered = pendingIceCandidatesRef.current;
+    pendingIceCandidatesRef.current = [];
+    for (const candidate of buffered) {
+      client.addRemoteIceCandidate(candidate);
+    }
 
     try {
       // Also awaited here (not just on the "incoming" event) as a safety
