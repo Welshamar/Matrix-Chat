@@ -9,27 +9,24 @@ import { env } from "../config/env";
 // was the exact cause of the first test push arriving with no sound).
 const ANDROID_CHANNEL_ID = "messages_v2";
 
-let ready: boolean | null = null;
-
+// getApps().length is the memoization here — once initializeApp() actually
+// succeeds there's nothing left to do on later calls. Deliberately does NOT
+// cache a failure the way an earlier version did: that meant one transient
+// hiccup (e.g. the env var not being fully available yet on a cold start)
+// permanently disabled every push notification for the rest of the
+// process's uptime, with nothing but a console.error to show for it.
 function ensureInitialized(): boolean {
-  if (ready !== null) return ready;
-
-  if (!env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    ready = false;
-    return ready;
-  }
+  if (getApps().length > 0) return true;
+  if (!env.FIREBASE_SERVICE_ACCOUNT_JSON) return false;
 
   try {
     const serviceAccount = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    if (getApps().length === 0) {
-      initializeApp({ credential: cert(serviceAccount) });
-    }
-    ready = true;
+    initializeApp({ credential: cert(serviceAccount) });
+    return true;
   } catch (err) {
     console.error("Failed to initialize Firebase Admin SDK:", err);
-    ready = false;
+    return false;
   }
-  return ready;
 }
 
 /** Fire-and-forget: pushes are a best-effort convenience notification, not
@@ -38,14 +35,18 @@ function ensureInitialized(): boolean {
  *  reconnects — see fetchInbox/messages.controller.ts). The push body is
  *  deliberately generic; the server has no plaintext to put in it anyway. */
 export async function sendPushNotification(fcmToken: string, title: string, body: string): Promise<void> {
-  if (!ensureInitialized()) return;
+  if (!ensureInitialized()) {
+    console.error("Push notification skipped: Firebase Admin SDK not initialized (check FIREBASE_SERVICE_ACCOUNT_JSON).");
+    return;
+  }
 
   try {
-    await getMessaging().send({
+    const messageId = await getMessaging().send({
       token: fcmToken,
       notification: { title, body },
       android: { priority: "high", notification: { channelId: ANDROID_CHANNEL_ID, sound: "default" } },
     });
+    console.log("Push notification sent:", messageId);
   } catch (err) {
     console.error("Failed to send push notification:", err);
   }

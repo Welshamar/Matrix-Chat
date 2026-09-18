@@ -21,6 +21,14 @@ const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: env.CORS_ORIGIN },
   maxHttpBufferSize: 10 * 1024 * 1024, // headroom for base64 voice-note/file ciphertext (default 1MB is too tight)
+  // Socket.io's defaults (25s ping interval, 20s timeout) mean a killed app
+  // can look "still connected" to the server for up to ~45s after it's
+  // actually gone -- long enough that a message sent in that window skips
+  // the push notification (see isUserVisible in signal.gateway.ts) because
+  // the server thinks a live socket will deliver it. Tightened so a dead
+  // connection is detected in ~18s instead.
+  pingInterval: 10_000,
+  pingTimeout: 8_000,
 });
 
 registerSignalGateway(io);
