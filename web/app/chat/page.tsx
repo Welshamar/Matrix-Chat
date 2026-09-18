@@ -348,11 +348,23 @@ export default function ChatPage() {
 
   // Register this device for push once we know who's logged in — a no-op
   // outside the native Android shell (see registerForPushNotifications).
+  // Also re-runs on every foreground resume, not just a cold start — the
+  // channel/token setup should be idempotent, and a user who merely
+  // backgrounded the app (rather than fully killing it) would otherwise
+  // never get a channel created on a device that has never opened this
+  // build fresh.
   useEffect(() => {
     if (!session) return;
-    registerForPushNotifications((fcmToken) => {
-      registerPushToken(session.token, fcmToken).catch((err) => console.error("Failed to register push token:", err));
-    });
+    const register = () => {
+      registerForPushNotifications((fcmToken) => {
+        registerPushToken(session.token, fcmToken).catch((err) => console.error("Failed to register push token:", err));
+      });
+    };
+    register();
+    const handle = Capacitor.isNativePlatform() ? CapacitorApp.addListener("resume", register) : null;
+    return () => {
+      handle?.then((h) => h.remove());
+    };
   }, [session]);
 
   useEffect(() => {
@@ -1056,7 +1068,6 @@ export default function ChatPage() {
     setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
     setCallError(null);
     setCallStatus("outgoing");
-    startCallAudioRouting();
 
     const client = new CallClient(socket, peer.peerId, callId, {
       onRemoteStream: attachRemoteStream,
@@ -1065,6 +1076,11 @@ export default function ChatPage() {
     callClientRef.current = client;
 
     try {
+      // Must finish before the mic is grabbed below — switching Android's
+      // audio mode while an AudioRecord session is starting up can reset
+      // it mid-capture, which was cancelling outgoing calls before they
+      // even connected.
+      await startCallAudioRouting();
       const offer = await client.startAsCaller();
       const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
         socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer }, resolve);
@@ -1099,6 +1115,10 @@ export default function ChatPage() {
     callClientRef.current = client;
 
     try {
+      // Also awaited here (not just on the "incoming" event) as a safety
+      // net in case accept is tapped fast enough to race the mode switch —
+      // it's a no-op on the native side if routing is already active.
+      await startCallAudioRouting();
       const answer = await client.acceptAsCallee(offer);
       pendingOfferRef.current = null;
       socket.emit("call:answer", { toUserId: peerUserId, callId, sdp: answer });

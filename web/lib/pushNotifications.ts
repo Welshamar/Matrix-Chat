@@ -23,18 +23,15 @@ export async function registerForPushNotifications(onToken: (token: string) => v
   if (!Capacitor.isNativePlatform()) return;
 
   try {
-    const status = await PushNotifications.checkPermissions();
-    let granted = status.receive === "granted";
-    if (status.receive === "prompt" || status.receive === "prompt-with-rationale") {
-      const requested = await PushNotifications.requestPermissions();
-      granted = requested.receive === "granted";
-    }
-    if (!granted) return;
-
-    // Importance 4 (HIGH) + no explicit `sound` override = Android's own
-    // default notification sound, plus a heads-up banner — omitting the
-    // channel entirely (or leaving importance low) is what produces a
-    // silent notification.
+    // Created unconditionally, before the permission check below — Android
+    // lets an app create/own a notification channel regardless of whether
+    // POST_NOTIFICATIONS is granted (only actually *posting* a notification
+    // needs that). Gating this behind the permission check meant that if
+    // requestPermissions ever returned anything other than "granted", the
+    // channel never got created at all — and a push naming a channel that
+    // doesn't yet exist on the device is silently dropped by Android
+    // entirely (no sound, no banner), which is worse than the stale-channel
+    // bug this id bump was meant to fix.
     await PushNotifications.createChannel({
       id: MESSAGE_CHANNEL_ID,
       name: "Messages",
@@ -43,6 +40,14 @@ export async function registerForPushNotifications(onToken: (token: string) => v
       visibility: 1,
       vibration: true,
     });
+
+    const status = await PushNotifications.checkPermissions();
+    let granted = status.receive === "granted";
+    if (status.receive === "prompt" || status.receive === "prompt-with-rationale") {
+      const requested = await PushNotifications.requestPermissions();
+      granted = requested.receive === "granted";
+    }
+    if (!granted) return;
 
     await PushNotifications.removeAllListeners();
     await PushNotifications.addListener("registration", (token) => onToken(token.value));
