@@ -75,9 +75,18 @@ export interface SendSignalMessageOptions {
   groupId?: string;
 }
 
+// The caller's composer stays disabled until this resolves, and a plain
+// socket.emit ack callback never fires if the connection drops after the
+// frame went out (routine on a phone) -- which used to freeze the composer
+// until the app was reloaded. Scaled by payload size so a big file on a slow
+// uplink isn't cut off early, while a genuinely lost ack still gives up.
+const ACK_BASE_TIMEOUT_MS = 30_000;
+const ACK_TIMEOUT_MS_PER_KB = 40;
+
 export function sendSignalMessage(socket: Socket, opts: SendSignalMessageOptions): Promise<SocketAck> {
+  const timeoutMs = ACK_BASE_TIMEOUT_MS + Math.ceil(opts.ciphertext.length / 1024) * ACK_TIMEOUT_MS_PER_KB;
   return new Promise((resolve) => {
-    socket.emit(
+    socket.timeout(timeoutMs).emit(
       "signal:message",
       {
         recipientId: opts.recipientId,
@@ -87,7 +96,10 @@ export function sendSignalMessage(socket: Socket, opts: SendSignalMessageOptions
         kind: opts.kind ?? "TEXT",
         groupId: opts.groupId,
       },
-      resolve
+      (err: Error | null, res?: SocketAck) => {
+        if (err || !res) resolve({ ok: false, error: "No confirmation from the server -- check your connection and try again." });
+        else resolve(res);
+      }
     );
   });
 }
