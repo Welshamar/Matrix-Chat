@@ -1,4 +1,4 @@
-import { createStore, get, set, UseStore } from "idb-keyval";
+import { createStore, get, set, update, UseStore } from "idb-keyval";
 import { FileMeta, ReplyRef } from "./messageEnvelope";
 
 /**
@@ -121,15 +121,29 @@ export async function appendMessage(userId: string, peerId: string, message: Loc
   await set(`conv:${peerId}`, updated, messagesStore(userId));
 }
 
+const STATUS_RANK: Record<MessageStatus, number> = { PENDING: 0, SENT: 1, DELIVERED: 2, READ: 3 };
+
+// Two things here matter. The status only ever moves forward: when the
+// recipient already has the thread open they send "read" and then "delivered"
+// for the same message, and applying them in that order used to knock a read
+// message back to grey ticks. And update() does the read and the write inside
+// one IndexedDB transaction -- with a separate get() then set(), two receipts
+// landing together each wrote back a stale copy of the thread and one
+// silently overwrote the other.
 export async function updateMessageStatus(
   userId: string,
   peerId: string,
   messageId: string,
   status: MessageStatus
 ): Promise<void> {
-  const existing = await getMessages(userId, peerId);
-  const updated = existing.map((m) => (m.id === messageId ? { ...m, status } : m));
-  await set(`conv:${peerId}`, updated, messagesStore(userId));
+  await update<LocalMessage[]>(
+    `conv:${peerId}`,
+    (existing) =>
+      (existing ?? []).map((m) =>
+        m.id === messageId && STATUS_RANK[status] > STATUS_RANK[m.status] ? { ...m, status } : m
+      ),
+    messagesStore(userId)
+  );
 }
 
 export async function markViewOnceOpened(userId: string, peerId: string, messageId: string): Promise<void> {

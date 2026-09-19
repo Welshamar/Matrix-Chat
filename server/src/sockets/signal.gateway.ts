@@ -183,9 +183,14 @@ export function registerSignalGateway(io: Server): void {
         }
 
         try {
+          // Only the addressee can acknowledge a message. And once they have,
+          // the server has no reason to keep the ciphertext: the recipient
+          // holds the message locally, and the inbox only ever serves rows
+          // still in SENT. Dropping it here (as view-once already does) keeps
+          // the database from filling up with delivered photos and files.
           const message = await prisma.message.update({
-            where: { id: payload.messageId },
-            data: { status: payload.status },
+            where: { id: payload.messageId, recipientId: userId },
+            data: { status: payload.status, ciphertext: null },
           });
 
           io.to(userRoom(message.senderId)).emit("signal:receipt", {

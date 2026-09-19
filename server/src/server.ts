@@ -20,7 +20,11 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: { origin: env.CORS_ORIGIN },
-  maxHttpBufferSize: 10 * 1024 * 1024, // headroom for base64 voice-note/file ciphertext (default 1MB is too tight)
+  // A file goes out as base64 inside the message envelope, then the whole
+  // envelope is encrypted and base64'd again, so one frame is ~1.8x the file
+  // (16MB file -> ~29MB). Sized for FileAttachButton's MAX_FILE_BYTES; the
+  // default 1MB is far too tight.
+  maxHttpBufferSize: 40 * 1024 * 1024,
   // Socket.io's defaults (25s ping interval, 20s timeout) mean a killed app
   // can look "still connected" to the server for up to ~45s after it's
   // actually gone -- long enough that a message sent in that window skips

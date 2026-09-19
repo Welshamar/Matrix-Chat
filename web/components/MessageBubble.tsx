@@ -95,6 +95,7 @@ interface MessageBubbleProps {
   onOpenViewOnce: (messageId: string) => void;
   onReply: (message: LocalMessage) => void;
   onDelete: (messageId: string) => void;
+  onViewImage?: (message: LocalMessage) => void;
   showSender?: boolean;
   // Who the voice-note avatar shows (the sender of this message). Plain
   // strings rather than an object so the memoized bubble stays memoized.
@@ -107,7 +108,7 @@ interface MessageBubbleProps {
 // this, every message bubble in the whole thread re-executes on every one
 // of those renders, which is what made typing feel laggy once the other
 // side's typing status started updating on top of your own keystrokes.
-function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSender, avatarName, avatarUrl }: MessageBubbleProps) {
+function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewImage, showSender, avatarName, avatarUrl }: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
@@ -250,9 +251,17 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSen
     if (file.mime.startsWith("image/")) {
       body = (
         <div className="file-image-wrap">
-          <a href={message.body} target="_blank" rel="noopener noreferrer" className="file-image-link">
+          <button
+            type="button"
+            className="file-image-link"
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewImage?.(message);
+            }}
+            aria-label={`Open ${file.name}`}
+          >
             <img src={message.body} alt={file.name} className="file-image" />
-          </a>
+          </button>
           <div className="file-image-actions">
             <button
               type="button"

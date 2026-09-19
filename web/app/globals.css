@@ -1571,14 +1571,120 @@ input {
 
 .file-image-link {
   display: block;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+  line-height: 0;
 }
 
+/* Shown whole, never cropped: width/height stay auto so the photo keeps its
+   own aspect ratio inside the max box (object-fit: cover used to slice a
+   landscape or portrait photo down to a square thumbnail). */
 .file-image {
   display: block;
-  max-width: 260px;
-  max-height: 260px;
+  width: auto;
+  height: auto;
+  max-width: min(300px, 72vw);
+  max-height: 360px;
   border-radius: 8px;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+/* --- Full-screen image viewer --- */
+
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+}
+
+.image-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: rgba(18, 21, 29, 0.96);
+  flex-shrink: 0;
+}
+
+.image-viewer-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 6px;
+}
+
+.image-viewer-name {
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-viewer-details {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.image-viewer-btn {
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.image-viewer-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.image-viewer-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  cursor: zoom-in;
+}
+
+/* Actual size: every source pixel maps to one CSS pixel, scrollable to pan. */
+.image-viewer-stage.actual {
+  display: block;
+  overflow: auto;
+}
+
+.image-viewer-stage.actual .image-viewer-img {
+  max-width: none;
+  max-height: none;
+  cursor: zoom-out;
+}
+
+.image-viewer-hint {
+  flex-shrink: 0;
+  text-align: center;
+  padding: 8px 12px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: rgba(18, 21, 29, 0.96);
 }
 
 .file-image-actions {

@@ -123,10 +123,17 @@ export function VoiceRecorderButton({ onRecorded, disabled, onRecordingChange }:
     dragOriginRef.current = { x: e.clientX, y: e.clientY };
 
     try {
+      // Echo cancellation and noise suppression exist for live calls, where
+      // the speaker feeds back into the mic. For a voice *note* they only
+      // hurt: on Android they switch the mic to its call-processing path,
+      // which is what makes recordings sound thin, muffled or "underwater"
+      // (speech gets chewed up by the suppressor). Left off so the mic
+      // captures the raw voice; gain control stays on so a quiet talker is
+      // still loud enough on playback.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: true,
           channelCount: 1,
           sampleRate: 48000,
@@ -137,11 +144,11 @@ export function VoiceRecorderButton({ onRecorded, disabled, onRecordingChange }:
 
       const mimeType = pickMimeType();
       // The browser/WebView default bitrate for voice is low enough to
-      // sound muffled — 64kbps mono opus is a clear, WhatsApp-comparable
-      // voice note without bloating the message size.
+      // sound muffled. 96kbps mono opus is well past transparent for speech
+      // (a 2 minute note is ~1.4MB, comfortably inside the message limit).
       const recorder = new MediaRecorder(stream, {
         ...(mimeType ? { mimeType } : {}),
-        audioBitsPerSecond: 64_000,
+        audioBitsPerSecond: 96_000,
       });
       recorderRef.current = recorder;
 

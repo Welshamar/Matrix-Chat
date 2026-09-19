@@ -73,6 +73,7 @@ import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
 import { CallOverlay, CallStatus } from "@/components/CallOverlay";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 import { FileAttachButton } from "@/components/FileAttachButton";
+import { ImageViewer } from "@/components/ImageViewer";
 
 type ChatFilter = "all" | "unread" | "favourites" | "groups";
 
@@ -108,6 +109,7 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [viewOnceArmed, setViewOnceArmed] = useState(false);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+  const [viewerMessage, setViewerMessage] = useState<LocalMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showNewGroupModal, setShowNewGroupModal] = useState(false);
@@ -202,6 +204,7 @@ export default function ChatPage() {
   const showProfileModalRef = useRef(false);
   const showContactDetailsRef = useRef(false);
   const showEmojiPickerRef = useRef(false);
+  const imageViewerOpenRef = useRef(false);
   const exitPromptArmedRef = useRef(false);
   const exitPromptTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showExitPrompt, setShowExitPrompt] = useState(false);
@@ -221,6 +224,9 @@ export default function ChatPage() {
   useEffect(() => {
     showEmojiPickerRef.current = showEmojiPicker;
   }, [showEmojiPicker]);
+  useEffect(() => {
+    imageViewerOpenRef.current = viewerMessage !== null;
+  }, [viewerMessage]);
 
   // Mirrors WhatsApp: back closes whatever's open (innermost first), then
   // backs out of an open thread to the chat list, and only exits the app
@@ -235,6 +241,10 @@ export default function ChatPage() {
     let handle: { remove: () => void } | null = null;
 
     const subPromise = CapacitorApp.addListener("backButton", () => {
+      if (imageViewerOpenRef.current) {
+        setViewerMessage(null);
+        return;
+      }
       if (showGroupInfoModalRef.current) {
         setShowGroupInfoModal(false);
         return;
@@ -1076,6 +1086,9 @@ export default function ChatPage() {
   // render (e.g. from a typing-indicator update, or the composer's own
   // per-keystroke state change) would force every bubble in the thread to
   // re-render regardless, which is what made typing feel laggy.
+  const handleViewImage = useCallback((message: LocalMessage) => setViewerMessage(message), []);
+  const closeImageViewer = useCallback(() => setViewerMessage(null), []);
+
   const handleReplyToMessage = useCallback((message: LocalMessage) => {
     setReplyingTo(message);
     composerInputRef.current?.focus();
@@ -1662,6 +1675,7 @@ export default function ChatPage() {
                     showSender={!!activeGroup}
                     onReply={handleReplyToMessage}
                     onDelete={handleDeleteMessage}
+                    onViewImage={handleViewImage}
                     avatarName={avatar.name}
                     avatarUrl={avatar.avatarUrl}
                   />
@@ -1809,6 +1823,9 @@ export default function ChatPage() {
           onToggleMute={toggleCallMute}
           onUnlockAudio={handleUnlockCallAudio}
         />
+      )}
+      {viewerMessage?.file && (
+        <ImageViewer src={viewerMessage.body} name={viewerMessage.file.name} size={viewerMessage.file.size} onClose={closeImageViewer} />
       )}
       <audio ref={remoteAudioRef} autoPlay hidden />
       {showExitPrompt && <div className="exit-prompt-toast">Press back again to exit</div>}

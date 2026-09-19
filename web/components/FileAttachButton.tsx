@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
 import { FileMeta } from "@/lib/messageEnvelope";
 
-// Base64 inflates size by ~4/3, and the whole thing still has to fit inside
-// one Signal-encrypted socket frame (see server maxHttpBufferSize) alongside
-// JSON envelope overhead — keep real files well under that ceiling.
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+// Files travel untouched (no resizing or recompression), so this is the
+// ceiling for sending an original. Base64 inflates size by ~4/3 twice over --
+// once as the data URL inside the envelope, once as the encrypted payload --
+// so a frame is ~1.8x the file and has to fit the server's maxHttpBufferSize
+// (40MB). 16MB covers full-resolution phone photos and short clips.
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -31,7 +33,7 @@ export function FileAttachButton({ onFileSelected, disabled }: FileAttachButtonP
 
     setError(null);
     if (file.size > MAX_FILE_BYTES) {
-      setError(`"${file.name}" is too large — attachments are limited to 5 MB.`);
+      setError(`"${file.name}" is too large — attachments are limited to ${MAX_FILE_BYTES / (1024 * 1024)} MB.`);
       return;
     }
 
