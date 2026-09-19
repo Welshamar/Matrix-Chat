@@ -816,6 +816,13 @@ export default function ChatPage() {
   async function handleSelectConversation(conv: Conversation) {
     if (!session) return;
     stopTypingIfNeeded();
+    // Mirrored into the refs right now rather than waiting for the effect
+    // that follows the next render: the incoming-message handler decides
+    // "is this thread open?" from these refs, and in that render-sized gap it
+    // would treat a thread being opened as closed -- leaving the message
+    // unread and never sending the sender a read receipt.
+    activePeerRef.current = conv;
+    activeGroupRef.current = null;
     setActiveGroup(null);
     setActivePeer(conv);
     setShowEmojiPicker(false);
@@ -832,6 +839,8 @@ export default function ChatPage() {
   async function handleSelectGroup(group: LocalGroup) {
     if (!session) return;
     stopTypingIfNeeded();
+    activePeerRef.current = null;
+    activeGroupRef.current = group;
     setActivePeer(null);
     setActiveGroup(group);
     setShowEmojiPicker(false);
@@ -1041,6 +1050,17 @@ export default function ChatPage() {
   function replySenderLabelFor(m: LocalMessage): string {
     if (m.direction === "out") return "You";
     return m.senderUsername ?? activePeer?.peerUsername ?? "Unknown";
+  }
+
+  // Whose face goes on a voice note: mine for outgoing, otherwise the person
+  // who sent it (a specific member in a group, the peer in a 1:1).
+  function voiceAvatarFor(m: LocalMessage): { name: string; avatarUrl?: string | null } {
+    if (m.direction === "out") return { name: session?.username ?? "", avatarUrl: session?.avatarUrl };
+    if (activeGroup) {
+      const member = activeGroup.members.find((x) => x.userId === m.senderId);
+      return { name: member?.username ?? m.senderUsername ?? "?", avatarUrl: member?.avatarUrl };
+    }
+    return { name: activePeer?.peerUsername ?? "?", avatarUrl: activePeer?.peerAvatarUrl };
   }
 
   function buildReplyRef(m: LocalMessage): ReplyRef {
@@ -1632,16 +1652,21 @@ export default function ChatPage() {
               </div>
             </div>
             <div className="message-list" ref={messageListRef}>
-              {messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  onOpenViewOnce={handleOpenViewOnce}
-                  showSender={!!activeGroup}
-                  onReply={handleReplyToMessage}
-                  onDelete={handleDeleteMessage}
-                />
-              ))}
+              {messages.map((m) => {
+                const avatar = voiceAvatarFor(m);
+                return (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    onOpenViewOnce={handleOpenViewOnce}
+                    showSender={!!activeGroup}
+                    onReply={handleReplyToMessage}
+                    onDelete={handleDeleteMessage}
+                    avatarName={avatar.name}
+                    avatarUrl={avatar.avatarUrl}
+                  />
+                );
+              })}
             </div>
             {replyingTo && (
               <div className="reply-preview-bar">

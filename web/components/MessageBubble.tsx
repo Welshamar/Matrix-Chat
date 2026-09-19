@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
 import { saveDataUrlFile, shareDataUrlFile } from "@/lib/saveFile";
+import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 
 // How long a just-opened view-once photo stays visible before collapsing
 // back to the "Opened" placeholder — long enough to actually look at it,
@@ -95,6 +96,10 @@ interface MessageBubbleProps {
   onReply: (message: LocalMessage) => void;
   onDelete: (messageId: string) => void;
   showSender?: boolean;
+  // Who the voice-note avatar shows (the sender of this message). Plain
+  // strings rather than an object so the memoized bubble stays memoized.
+  avatarName?: string;
+  avatarUrl?: string | null;
 }
 
 // Memoized — the parent chat page is one large component that re-renders
@@ -102,7 +107,7 @@ interface MessageBubbleProps {
 // this, every message bubble in the whole thread re-executes on every one
 // of those renders, which is what made typing feel laggy once the other
 // side's typing status started updating on top of your own keystrokes.
-function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSender }: MessageBubbleProps) {
+function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSender, avatarName, avatarUrl }: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
@@ -230,7 +235,15 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, showSen
     body = "🔥 Opened";
     bubbleClass += " view-once-placeholder";
   } else if (isVoice) {
-    body = <audio controls preload="none" src={message.body} className="voice-player" />;
+    body = (
+      <VoiceMessagePlayer
+        messageId={message.id}
+        src={message.body}
+        avatarName={avatarName ?? message.senderUsername ?? "?"}
+        avatarUrl={avatarUrl}
+        direction={message.direction}
+      />
+    );
     bubbleClass += " voice-bubble";
   } else if (isFile && message.file) {
     const file = message.file;
