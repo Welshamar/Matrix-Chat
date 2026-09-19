@@ -1987,3 +1987,208 @@ input {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   z-index: 40;
 }
+
+/* --- Phone type scale ---
+   The base sizes above are tuned for a desktop window and read small on an
+   Android screen. This lifts them to WhatsApp-for-Android proportions (16sp
+   message text, 17sp chat names, 12sp timestamps, ...). It's the last block
+   in the file on purpose: same-specificity rules here override the base ones
+   by order, and it only applies to phone-width screens (which is what the
+   Android app's WebView is), so the desktop layout is untouched. */
+@media (max-width: 700px) {
+  /* Auth screens */
+  .auth-title {
+    font-size: 26px;
+  }
+  .auth-title-logo {
+    width: 32px;
+    height: 32px;
+  }
+  .auth-subtitle,
+  .auth-switch,
+  .error-banner,
+  .notice-banner {
+    font-size: 15px;
+  }
+  .field label {
+    font-size: 15px;
+  }
+  .field input {
+    font-size: 17px;
+  }
+  .btn-primary,
+  .btn-secondary {
+    font-size: 16.5px;
+  }
+  .inline-error,
+  .auth-code-expiry {
+    font-size: 14px;
+  }
+
+  /* Sidebar / chat list */
+  .sidebar-brand-name {
+    font-size: 23px;
+  }
+  .sidebar-brand-logo {
+    width: 28px;
+    height: 28px;
+  }
+  .me-name {
+    font-size: 17px;
+  }
+  .me-status {
+    font-size: 14px;
+    max-width: 62vw;
+  }
+  .logout-btn {
+    font-size: 14px;
+  }
+  .chats-title {
+    font-size: 25px;
+  }
+  .composer-icon-btn,
+  .new-chat-fab {
+    font-size: 24px;
+  }
+  .chat-search-row input {
+    font-size: 16.5px;
+  }
+  .filter-tab {
+    font-size: 15.5px;
+  }
+  .dropdown-item {
+    font-size: 16px;
+  }
+  .conversation-item .peer {
+    font-size: 18px;
+  }
+  .conversation-item .preview {
+    font-size: 15px;
+  }
+  .unread-badge {
+    font-size: 13px;
+    min-width: 21px;
+    height: 21px;
+    border-radius: 11px;
+  }
+  .empty-conversations,
+  .chat-empty-state {
+    font-size: 15.5px;
+  }
+
+  /* Conversation header */
+  .chat-header-name {
+    font-size: 19px;
+  }
+  .chat-header .lock {
+    font-size: 14px;
+  }
+  .chat-back-btn {
+    font-size: 26px;
+  }
+
+  /* Messages */
+  .bubble {
+    max-width: 82%;
+    font-size: 17px;
+  }
+  .bubble .meta {
+    font-size: 12px;
+  }
+  .view-once-badge {
+    font-size: 13px;
+  }
+  .group-sender-label {
+    font-size: 14px;
+  }
+  .call-log-pill {
+    font-size: 14px;
+  }
+  .reply-quote {
+    font-size: 14.5px;
+  }
+  .msg-dropdown-item {
+    font-size: 16px;
+  }
+  .file-card-name {
+    font-size: 15.5px;
+  }
+  .file-card-size,
+  .file-save-status {
+    font-size: 13.5px;
+  }
+  .file-card-badge {
+    font-size: 11.5px;
+  }
+  .voice-msg-duration {
+    font-size: 12.5px;
+  }
+
+  /* Composer */
+  .composer-input-pill input {
+    font-size: 17px;
+  }
+  .reply-preview-sender {
+    font-size: 14px;
+  }
+  .reply-preview-body {
+    font-size: 15px;
+  }
+  .voice-recording-time {
+    font-size: 16px;
+  }
+  .voice-slide-hint {
+    font-size: 15px;
+  }
+
+  /* Details panel, modals, groups */
+  .contact-details-title {
+    font-size: 17px;
+  }
+  .contact-details-name {
+    font-size: 21px;
+  }
+  .contact-details-status {
+    font-size: 14.5px;
+  }
+  .contact-details-media-title,
+  .contact-details-media-empty {
+    font-size: 15px;
+  }
+  .modal-title {
+    font-size: 21px;
+  }
+  .new-group-add-row input {
+    font-size: 16.5px;
+  }
+  .new-group-member-chip {
+    font-size: 15px;
+  }
+  .group-info-subtitle {
+    font-size: 15px;
+  }
+  .group-member-name {
+    font-size: 16.5px;
+  }
+  .group-member-role,
+  .group-member-actions .btn-secondary {
+    font-size: 13px;
+  }
+
+  /* Calls */
+  .call-overlay-name {
+    font-size: 23px;
+  }
+  .call-overlay-status {
+    font-size: 16px;
+  }
+  .call-audio-unlock {
+    font-size: 15px;
+  }
+  .exit-prompt-toast {
+    font-size: 15px;
+  }
+  .loading-screen {
+    font-size: 16px;
+  }
+}
