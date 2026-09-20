@@ -2259,6 +2259,381 @@ input {
   padding-top: 40px;
 }
 
+/* --- Video calls (Google-Meet-style) + floating emoji reactions --- */
+
+.call-ctl-btn.active {
+  background: #8ab4f8;
+  color: #202124;
+}
+
+/* The picture: peer (or, while ringing, my own camera) fills the whole card. */
+.call-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  background: #0a1014;
+}
+
+.call-remote-video,
+.call-self-full {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0a1014;
+}
+
+.call-self-full.mirror,
+.call-self-pip.mirror .call-self-pip-video {
+  transform: scaleX(-1);
+}
+
+/* Soft darkening so the name/status stay readable over my own preview. */
+.call-stage-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.5) 0%, rgba(0, 0, 0, 0) 32%, rgba(0, 0, 0, 0) 60%, rgba(0, 0, 0, 0.45) 100%);
+  pointer-events: none;
+}
+
+.call-peer-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+}
+
+.call-peer-placeholder .call-avatar-wrap {
+  margin-top: 0;
+}
+
+.call-camera-off-note {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(32, 33, 36, 0.7);
+  padding: 6px 14px;
+  border-radius: 16px;
+}
+
+.call-topbar-video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  padding: calc(10px + env(safe-area-inset-top)) 8px 26px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.6) 0%, rgba(0, 0, 0, 0) 100%);
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+.call-video-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 0 4px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+
+.call-video .call-name {
+  font-size: 19px;
+}
+
+.call-video .call-status {
+  margin-top: 2px;
+  font-size: 14px;
+}
+
+/* Self-view tile, bottom-right like Meet. */
+.call-self-pip {
+  position: absolute;
+  right: 14px;
+  bottom: calc(104px + env(safe-area-inset-bottom));
+  z-index: 3;
+  width: 96px;
+  height: 136px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #202124;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  transition: bottom 0.25s;
+}
+
+.call-self-pip.raised {
+  bottom: calc(166px + env(safe-area-inset-bottom));
+}
+
+.call-self-pip.low {
+  bottom: calc(22px + env(safe-area-inset-bottom));
+}
+
+.call-self-pip-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.call-self-off {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #cfd3d6;
+}
+
+.call-self-pip-label {
+  position: absolute;
+  left: 6px;
+  bottom: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: rgba(32, 33, 36, 0.72);
+  color: #fff;
+}
+
+.call-peer-muted-chip {
+  position: absolute;
+  left: 14px;
+  bottom: calc(112px + env(safe-area-inset-bottom));
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 8px;
+  border-radius: 16px;
+  background: rgba(32, 33, 36, 0.8);
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 55%;
+}
+
+.call-audio-unlock-video {
+  position: absolute;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  margin-top: 0;
+  background: rgba(32, 33, 36, 0.9);
+}
+
+/* Meet-style floating control bar: a dark pill of round buttons. */
+.call-controls-video {
+  margin-top: auto;
+  align-self: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 3;
+  padding: 9px 14px;
+  margin-bottom: calc(22px + env(safe-area-inset-bottom));
+  background: rgba(32, 33, 36, 0.88);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border-radius: 40px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+.call-controls-video .call-ctl-btn {
+  width: 52px;
+  height: 52px;
+}
+
+.call-controls-video .call-ctl-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.call-controls-video .call-ctl-end {
+  width: 68px;
+  border-radius: 28px;
+}
+
+.call-video.chrome-hidden .call-topbar-video {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-14px);
+}
+
+.call-video.chrome-hidden .call-controls-video {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(16px);
+}
+
+/* Reactions: emoji + sender name drift up the screen and fade. */
+.call-reactions-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.call-reaction {
+  position: absolute;
+  bottom: 156px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: call-reaction-float var(--life, 3600ms) cubic-bezier(0.22, 0.6, 0.35, 1) forwards;
+}
+
+.call-video .call-reaction {
+  bottom: 120px;
+}
+
+.call-reaction-emoji {
+  position: relative;
+  font-size: 46px;
+  line-height: 1;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.call-reaction-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 9px;
+  border-radius: 11px;
+  background: rgba(32, 33, 36, 0.82);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@keyframes call-reaction-float {
+  0% {
+    transform: translate(0, 24px) scale(0.3);
+    opacity: 0;
+  }
+  7% {
+    transform: translate(calc(var(--sway) * 0.08), 0) scale(1.3);
+    opacity: 1;
+  }
+  14% {
+    transform: translate(calc(var(--sway) * 0.15), -22px) scale(1);
+    opacity: 1;
+  }
+  62% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--sway), -58vh) scale(1.08);
+    opacity: 0;
+  }
+}
+
+.call-confetti {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.call-confetti i {
+  position: absolute;
+  width: 7px;
+  height: 11px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: call-confetti-burst 1.15s ease-out forwards;
+}
+
+@keyframes call-confetti-burst {
+  0% {
+    transform: translate(0, 0) rotate(0) scale(0.4);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--dx), calc(var(--dy) + 46px)) rotate(var(--rot)) scale(1);
+    opacity: 0;
+  }
+}
+
+/* Emoji picker that pops above the controls. */
+.call-reaction-tray {
+  position: absolute;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 32px;
+  background: rgba(32, 33, 36, 0.95);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  animation: call-tray-in 0.18s ease-out;
+}
+
+.call-video .call-reaction-tray {
+  bottom: calc(104px + env(safe-area-inset-bottom));
+}
+
+.call-reaction-pick {
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  font-size: 26px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s, background 0.12s;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.call-reaction-pick:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.18);
+}
+
+.call-reaction-pick:active {
+  transform: scale(0.92);
+}
+
+@keyframes call-tray-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-reaction {
+    animation-duration: 2.4s;
+  }
+  .call-confetti {
+    display: none;
+  }
+}
+
 .exit-prompt-toast {
   position: fixed;
   bottom: 24px;

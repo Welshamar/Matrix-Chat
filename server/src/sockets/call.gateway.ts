@@ -2,10 +2,12 @@ import { Server, Socket } from "socket.io";
 import { isUserOnline, userRoom } from "./signal.gateway";
 import {
   CallAnswerPayload,
+  CallCameraPayload,
   CallEndPayload,
   CallIcePayload,
   CallInvitePayload,
   CallMutePayload,
+  CallReactionPayload,
   SocketAck,
 } from "../types/signal.types";
 
@@ -26,6 +28,25 @@ function isValidAnswerPayload(p: unknown): p is CallAnswerPayload {
 function isValidIcePayload(p: unknown): p is CallIcePayload {
   const v = p as Partial<CallIcePayload> | null;
   return !!(v && isNonEmptyString(v.toUserId) && isNonEmptyString(v.callId) && v.candidate);
+}
+
+function isValidCameraPayload(p: unknown): p is CallCameraPayload {
+  const v = p as Partial<CallCameraPayload> | null;
+  return !!(v && isNonEmptyString(v.toUserId) && isNonEmptyString(v.callId) && typeof v.on === "boolean");
+}
+
+// A reaction is a single emoji glyph, never free text: this is relayed to the
+// other person's screen and rendered, so keep it tiny and bounded.
+const MAX_REACTION_LENGTH = 16;
+function isValidReactionPayload(p: unknown): p is CallReactionPayload {
+  const v = p as Partial<CallReactionPayload> | null;
+  return !!(
+    v &&
+    isNonEmptyString(v.toUserId) &&
+    isNonEmptyString(v.callId) &&
+    isNonEmptyString(v.emoji) &&
+    v.emoji.length <= MAX_REACTION_LENGTH
+  );
 }
 
 function isValidMutePayload(p: unknown): p is CallMutePayload {
@@ -60,6 +81,7 @@ export function registerCallGateway(io: Server): void {
         fromUsername: (socket.data.username as string) ?? "Unknown",
         callId: payload.callId,
         sdp: payload.sdp,
+        video: payload.video === true,
       });
       ack?.({ ok: true });
     });
@@ -89,6 +111,27 @@ export function registerCallGateway(io: Server): void {
         fromUserId: userId,
         callId: payload.callId,
         muted: payload.muted,
+      });
+    });
+
+    // The other side's camera turned on/off, so it can show an avatar
+    // placeholder instead of a frozen or black frame.
+    socket.on("call:camera", (payload: unknown) => {
+      if (!isValidCameraPayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:peer-camera", {
+        fromUserId: userId,
+        callId: payload.callId,
+        on: payload.on,
+      });
+    });
+
+    // Emoji reactions that float up the other person's screen.
+    socket.on("call:reaction", (payload: unknown) => {
+      if (!isValidReactionPayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:reacted", {
+        fromUserId: userId,
+        callId: payload.callId,
+        emoji: payload.emoji,
       });
     });
 

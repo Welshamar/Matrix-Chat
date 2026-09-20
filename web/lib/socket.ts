@@ -43,6 +43,7 @@ export interface IncomingCallEvent {
   fromUsername: string;
   callId: string;
   sdp: RTCSessionDescriptionInit;
+  video?: boolean;
 }
 
 export interface CallAnsweredEvent {

@@ -71,6 +71,7 @@ import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
 import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
 import { CallOverlay, CallStatus } from "@/components/CallOverlay";
+import { CALL_REACTION_LIFETIME_MS, CallReaction } from "@/components/CallReactions";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 import { FileAttachButton } from "@/components/FileAttachButton";
 import { ImageViewer } from "@/components/ImageViewer";
@@ -131,6 +132,17 @@ export default function ChatPage() {
   const [callMinimized, setCallMinimized] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [callNeedsAudioUnlock, setCallNeedsAudioUnlock] = useState(false);
+  // Video calls: our own camera stream (self-view), the peer's stream (its
+  // video track feeds the big picture; its audio plays via the <audio> below),
+  // and whether each side's camera is currently on.
+  const [callVideo, setCallVideo] = useState(false);
+  const [callLocalStream, setCallLocalStream] = useState<MediaStream | null>(null);
+  const [callRemoteStream, setCallRemoteStream] = useState<MediaStream | null>(null);
+  const [callCameraOn, setCallCameraOn] = useState(false);
+  const [callPeerCameraOn, setCallPeerCameraOn] = useState(false);
+  const [callCanSendVideo, setCallCanSendVideo] = useState(false);
+  const [callFacing, setCallFacing] = useState<"user" | "environment">("user");
+  const [callReactions, setCallReactions] = useState<CallReaction[]>([]);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -166,6 +178,8 @@ export default function ChatPage() {
   // callStatus because that transitions to "connected" once answered, and
   // the call-log entry logged on teardown still needs to know.
   const callDirectionRef = useRef<"outgoing" | "incoming" | null>(null);
+  const callVideoRef = useRef(false);
+  const lastReactionSentRef = useRef(0);
   // Who we last told "I'm typing" — cleared (and the other side told
   // "stopped") after a few seconds of no keystrokes, on send, or when the
   // active thread changes.
@@ -665,6 +679,9 @@ export default function ChatPage() {
         callIdRef.current = evt.callId;
         callDirectionRef.current = "incoming";
         pendingOfferRef.current = evt.sdp;
+        callVideoRef.current = evt.video === true;
+        setCallVideo(evt.video === true);
+        setCallPeerCameraOn(evt.video === true);
         setCallPeer({ userId: evt.fromUserId, username: evt.fromUsername });
         setCallError(null);
         setCallStatus("incoming");
@@ -687,6 +704,16 @@ export default function ChatPage() {
       socket.on("call:peer-muted", (evt: { callId: string; muted: boolean }) => {
         if (callIdRef.current !== evt.callId) return;
         setCallPeerMuted(evt.muted);
+      });
+
+      socket.on("call:peer-camera", (evt: { callId: string; on: boolean }) => {
+        if (callIdRef.current !== evt.callId) return;
+        setCallPeerCameraOn(evt.on);
+      });
+
+      socket.on("call:reacted", (evt: { fromUserId: string; callId: string; emoji: string }) => {
+        if (callIdRef.current !== evt.callId) return;
+        pushCallReaction(evt.emoji, callPeerRef.current?.username ?? "", false);
       });
 
       socket.on("call:ice", (evt: CallIceEvent) => {
@@ -1222,13 +1249,15 @@ export default function ChatPage() {
     if (!peer || !direction) return;
 
     const wasConnected = callStatusRef.current === "connected" || callDurationRef.current > 0;
+    const isVideo = callVideoRef.current;
+    const icon = isVideo ? "🎥" : "📞";
     let body: string;
     if (wasConnected) {
-      body = `📞 Voice call · ${formatCallDuration(callDurationRef.current)}`;
+      body = `${icon} ${isVideo ? "Video" : "Voice"} call · ${formatCallDuration(callDurationRef.current)}`;
     } else if (direction === "outgoing") {
-      body = "📞 No answer";
+      body = `${icon} No answer`;
     } else {
-      body = "📞 Missed voice call";
+      body = `${icon} Missed ${isVideo ? "video" : "voice"} call`;
     }
 
     const timestamp = new Date().toISOString();
@@ -1251,13 +1280,18 @@ export default function ChatPage() {
   // audio can actually flow, so it deliberately does NOT flip the screen to
   // "connected"; that waits for the peer connection itself (handleCallConnected).
   function attachRemoteStream(stream: MediaStream) {
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = stream;
-      remoteAudioRef.current.play().catch(() => {
+    setCallRemoteStream(stream);
+    const audioEl = remoteAudioRef.current;
+    // ontrack fires once per track (twice on a video call) with the same
+    // stream -- re-assigning it would restart playback and abort the first play().
+    if (audioEl && audioEl.srcObject !== stream) {
+      audioEl.srcObject = stream;
+      audioEl.play().catch((err) => {
         // Autoplay-with-sound is often blocked this soon after a user
         // gesture (accepting/placing the call) — surface a one-tap unlock
-        // instead of silently leaving the call audible-but-silent.
-        setCallNeedsAudioUnlock(true);
+        // instead of silently leaving the call audible-but-silent. An
+        // AbortError is just a newer load superseding this one, not a block.
+        if (err?.name === "NotAllowedError") setCallNeedsAudioUnlock(true);
       });
     }
     // Safety net: if the WebView never reports the connection as up even
@@ -1321,6 +1355,15 @@ export default function ChatPage() {
     setCallConnecting(false);
     setCallMinimized(false);
     setCallNeedsAudioUnlock(false);
+    callVideoRef.current = false;
+    setCallVideo(false);
+    setCallLocalStream(null);
+    setCallRemoteStream(null);
+    setCallCameraOn(false);
+    setCallPeerCameraOn(false);
+    setCallCanSendVideo(false);
+    setCallFacing("user");
+    setCallReactions([]);
   }
 
   // Used for both "the other side hung up/declined/failed" and "something
@@ -1337,21 +1380,42 @@ export default function ChatPage() {
     }, 2500);
   }
 
-  async function startVoiceCall(peer: Conversation) {
+  function makeCallClient(socket: Socket, peerUserId: string, callId: string, video: boolean): CallClient {
+    return new CallClient(
+      socket,
+      peerUserId,
+      callId,
+      {
+        onRemoteStream: attachRemoteStream,
+        onFailure: failCall,
+        onConnected: handleCallConnected,
+        onLocalStream: setCallLocalStream,
+      },
+      video
+    );
+  }
+
+  // Pulls the camera state out of the engine once local media is acquired.
+  function syncCameraState(client: CallClient) {
+    setCallCanSendVideo(client.canSendVideo);
+    setCallCameraOn(client.isCameraOn);
+    setCallFacing(client.cameraFacing);
+  }
+
+  async function startCall(peer: Conversation, video = false) {
     if (!socketRef.current || callIdRef.current) return;
     const socket = socketRef.current;
     const callId = crypto.randomUUID();
     callIdRef.current = callId;
     callDirectionRef.current = "outgoing";
+    callVideoRef.current = video;
+    setCallVideo(video);
+    setCallPeerCameraOn(video);
     setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
     setCallError(null);
     setCallStatus("outgoing");
 
-    const client = new CallClient(socket, peer.peerId, callId, {
-      onRemoteStream: attachRemoteStream,
-      onFailure: failCall,
-      onConnected: handleCallConnected,
-    });
+    const client = makeCallClient(socket, peer.peerId, callId, video);
     callClientRef.current = client;
 
     try {
@@ -1365,8 +1429,9 @@ export default function ChatPage() {
       // waiting on mic permission above — don't resurrect it by inviting
       // the other side to a call we've already torn down.
       if (callIdRef.current !== callId) return;
+      syncCameraState(client);
       const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-        socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer }, resolve);
+        socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer, video }, resolve);
       });
       if (callIdRef.current !== callId) return;
       if (!ack.ok) {
@@ -1381,7 +1446,7 @@ export default function ChatPage() {
         failCall("No answer.");
       }, 30000);
     } catch (err) {
-      failCall(err instanceof Error ? err.message : "Couldn't access your microphone.");
+      failCall(err instanceof Error ? err.message : video ? "Couldn't access your camera or microphone." : "Couldn't access your microphone.");
     }
   }
 
@@ -1394,11 +1459,7 @@ export default function ChatPage() {
     const callId = callIdRef.current;
     const offer = pendingOfferRef.current;
 
-    const client = new CallClient(socket, peerUserId, callId, {
-      onRemoteStream: attachRemoteStream,
-      onFailure: failCall,
-      onConnected: handleCallConnected,
-    });
+    const client = makeCallClient(socket, peerUserId, callId, callVideoRef.current);
     callClientRef.current = client;
 
     // Flush anything that arrived while we were still ringing — see the
@@ -1418,7 +1479,13 @@ export default function ChatPage() {
       await startCallAudioRouting();
       const answer = await client.acceptAsCallee(offer);
       pendingOfferRef.current = null;
+      syncCameraState(client);
       socket.emit("call:answer", { toUserId: peerUserId, callId, sdp: answer });
+      // No usable camera on this side: take the call anyway and let the
+      // caller know to show an avatar rather than waiting on a video feed.
+      if (callVideoRef.current && !client.isCameraOn) {
+        socket.emit("call:camera", { toUserId: peerUserId, callId, on: false });
+      }
     } catch (err) {
       failCall(err instanceof Error ? err.message : "Couldn't access your microphone.");
     }
@@ -1447,6 +1514,60 @@ export default function ChatPage() {
     const next = !callSpeakerOn;
     setCallSpeakerOn(next);
     setCallSpeaker(next);
+  }
+
+  async function toggleCallCamera() {
+    const client = callClientRef.current;
+    if (!client?.canSendVideo) return;
+    const next = !client.isCameraOn;
+    try {
+      await client.setCameraEnabled(next);
+    } catch {
+      // Camera couldn't be reopened (taken by another app, permission revoked).
+      setCallCameraOn(client.isCameraOn);
+      return;
+    }
+    setCallCameraOn(client.isCameraOn);
+    if (socketRef.current && callPeer && callIdRef.current) {
+      socketRef.current.emit("call:camera", { toUserId: callPeer.userId, callId: callIdRef.current, on: client.isCameraOn });
+    }
+  }
+
+  async function switchCallCamera() {
+    const client = callClientRef.current;
+    if (!client?.canSendVideo) return;
+    try {
+      const facing = await client.switchCamera();
+      if (facing) setCallFacing(facing);
+    } catch {
+      // Keep whatever camera state we had.
+    }
+    setCallCameraOn(client.isCameraOn);
+  }
+
+  // Floats an emoji up the screen for a few seconds. Used for both my own taps
+  // (shown immediately, not waiting on a round trip) and the peer's.
+  function pushCallReaction(emoji: string, name: string, mine: boolean) {
+    const reaction: CallReaction = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      emoji,
+      name: mine ? "You" : name,
+      left: 8 + Math.random() * 70,
+      sway: Math.random() * 60 - 30,
+    };
+    setCallReactions((prev) => [...prev.slice(-24), reaction]);
+    setTimeout(() => setCallReactions((prev) => prev.filter((r) => r.id !== reaction.id)), CALL_REACTION_LIFETIME_MS);
+  }
+
+  function sendCallReaction(emoji: string) {
+    const now = Date.now();
+    // A held-down or hammered emoji button shouldn't flood the other screen.
+    if (now - lastReactionSentRef.current < 250) return;
+    lastReactionSentRef.current = now;
+    pushCallReaction(emoji, "", true);
+    if (socketRef.current && callPeer && callIdRef.current) {
+      socketRef.current.emit("call:reaction", { toUserId: callPeer.userId, callId: callIdRef.current, emoji });
+    }
   }
 
   async function handleCreateGroup(name: string, memberUserIds: string[]) {
@@ -1708,13 +1829,27 @@ export default function ChatPage() {
                   <button
                     type="button"
                     className="chat-info-btn"
-                    onClick={() => activePeer && startVoiceCall(activePeer)}
+                    onClick={() => activePeer && startCall(activePeer, false)}
                     disabled={!!callStatus}
                     aria-label="Voice call"
                     title="Voice call"
                   >
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                       <path d="M6.6 10.8c1.4 2.8 3.7 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.2 1.1L6.6 10.8z" />
+                    </svg>
+                  </button>
+                )}
+                {!activeGroup && (
+                  <button
+                    type="button"
+                    className="chat-info-btn"
+                    onClick={() => activePeer && startCall(activePeer, true)}
+                    disabled={!!callStatus}
+                    aria-label="Video call"
+                    title="Video call"
+                  >
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                      <path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z" />
                     </svg>
                   </button>
                 )}
@@ -1893,6 +2028,17 @@ export default function ChatPage() {
           minimized={callMinimized}
           error={callError}
           needsAudioUnlock={callNeedsAudioUnlock}
+          video={callVideo}
+          localStream={callLocalStream}
+          remoteStream={callRemoteStream}
+          cameraOn={callCameraOn}
+          peerCameraOn={callPeerCameraOn}
+          canSendVideo={callCanSendVideo}
+          facing={callFacing}
+          reactions={callReactions}
+          onToggleCamera={toggleCallCamera}
+          onSwitchCamera={switchCallCamera}
+          onReact={sendCallReaction}
           onAccept={handleAcceptCall}
           onDecline={handleDeclineCall}
           onToggleMute={toggleCallMute}

@@ -76,6 +76,8 @@ export interface CallInvitePayload {
   toUserId: string;
   callId: string;
   sdp: unknown;
+  // True for a video call (the offer then also carries a video m-line).
+  video?: boolean;
 }
 
 export interface CallAnswerPayload {
@@ -94,6 +96,18 @@ export interface CallMutePayload {
   toUserId: string;
   callId: string;
   muted: boolean;
+}
+
+export interface CallCameraPayload {
+  toUserId: string;
+  callId: string;
+  on: boolean;
+}
+
+export interface CallReactionPayload {
+  toUserId: string;
+  callId: string;
+  emoji: string;
 }
 
 export interface CallEndPayload {
