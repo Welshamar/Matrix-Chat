@@ -43,7 +43,7 @@
          MainActivity's WebChromeClient — see onPermissionRequest there. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <!-- Video calls: same story as RECORD_AUDIO -- getUserMedia({ video }) is
+    <!-- Video calls: same story as RECORD_AUDIO: getUserMedia({ video }) is
          only granted if the app declares CAMERA. Not required, so the app
          still installs on devices without a camera (voice calls still work). -->
     <uses-permission android:name="android.permission.CAMERA" />
