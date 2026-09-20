@@ -2429,6 +2429,22 @@ input {
   background: rgba(32, 33, 36, 0.9);
 }
 
+.call-permission-note {
+  margin-top: 18px;
+  max-width: 280px;
+  text-align: center;
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(32, 33, 36, 0.78);
+  padding: 9px 16px;
+  border-radius: 16px;
+}
+
+.call-peer-placeholder .call-permission-note {
+  margin-top: 0;
+}
+
 /* Meet-style floating control bar: a dark pill of round buttons. */
 .call-controls-video {
   margin-top: auto;

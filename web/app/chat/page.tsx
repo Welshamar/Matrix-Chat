@@ -179,6 +179,9 @@ export default function ChatPage() {
   // the call-log entry logged on teardown still needs to know.
   const callDirectionRef = useRef<"outgoing" | "incoming" | null>(null);
   const callVideoRef = useRef(false);
+  // Whether the invite actually went out -- a call that failed before ringing
+  // (camera/mic blocked) never reached anyone, so it isn't logged as "No answer".
+  const callInviteSentRef = useRef(false);
   const lastReactionSentRef = useRef(0);
   // Who we last told "I'm typing" — cleared (and the other side told
   // "stopped") after a few seconds of no keystrokes, on send, or when the
@@ -1249,6 +1252,7 @@ export default function ChatPage() {
     if (!peer || !direction) return;
 
     const wasConnected = callStatusRef.current === "connected" || callDurationRef.current > 0;
+    if (direction === "outgoing" && !wasConnected && !callInviteSentRef.current) return;
     const isVideo = callVideoRef.current;
     const icon = isVideo ? "🎥" : "📞";
     let body: string;
@@ -1374,10 +1378,12 @@ export default function ChatPage() {
     setCallMinimized(false);
     setCallError(message);
     if (callErrorTimeoutRef.current) clearTimeout(callErrorTimeoutRef.current);
+    // Long instructions (e.g. how to unblock the camera) need longer to read.
+    const readMs = Math.min(6000, Math.max(2500, message.length * 60));
     callErrorTimeoutRef.current = setTimeout(() => {
       resetCallState();
       setCallError(null);
-    }, 2500);
+    }, readMs);
   }
 
   function makeCallClient(socket: Socket, peerUserId: string, callId: string, video: boolean): CallClient {
@@ -1409,6 +1415,7 @@ export default function ChatPage() {
     callIdRef.current = callId;
     callDirectionRef.current = "outgoing";
     callVideoRef.current = video;
+    callInviteSentRef.current = false;
     setCallVideo(video);
     setCallPeerCameraOn(video);
     setCallPeer({ userId: peer.peerId, username: peer.peerUsername, avatarUrl: peer.peerAvatarUrl });
@@ -1438,6 +1445,7 @@ export default function ChatPage() {
         failCall(ack.error ?? "Couldn't place the call.");
         return;
       }
+      callInviteSentRef.current = true;
       setCallRinging(true);
       if (!callRingtoneRef.current) callRingtoneRef.current = new RingtonePlayer();
       callRingtoneRef.current.start("outgoing");
@@ -1446,6 +1454,9 @@ export default function ChatPage() {
         failCall("No answer.");
       }, 30000);
     } catch (err) {
+      // Hung up while the permission prompt was still open: the call is
+      // already gone (and a newer one may be in progress), so leave it alone.
+      if (callIdRef.current !== callId) return;
       failCall(err instanceof Error ? err.message : video ? "Couldn't access your camera or microphone." : "Couldn't access your microphone.");
     }
   }
@@ -1487,6 +1498,7 @@ export default function ChatPage() {
         socket.emit("call:camera", { toUserId: peerUserId, callId, on: false });
       }
     } catch (err) {
+      if (callIdRef.current !== callId) return;
       failCall(err instanceof Error ? err.message : "Couldn't access your microphone.");
     }
   }

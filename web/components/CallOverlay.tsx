@@ -180,6 +180,20 @@ export function CallOverlay({
     };
   }, [armHideTimer]);
 
+  // getUserMedia sits on the browser's / Android's permission prompt until it's
+  // answered, during which there's no picture and nothing rings. Say so (after
+  // a beat, so a quick grant doesn't flash it) instead of a silent "Calling…".
+  const mediaPending = !localStream && !error && (status === "outgoing" || connecting);
+  const [showPermissionHint, setShowPermissionHint] = useState(false);
+  useEffect(() => {
+    if (!mediaPending) {
+      setShowPermissionHint(false);
+      return;
+    }
+    const t = setTimeout(() => setShowPermissionHint(true), 1200);
+    return () => clearTimeout(t);
+  }, [mediaPending]);
+
   // The tray means nothing once the call isn't live.
   useEffect(() => {
     if (!live) setTrayOpen(false);
@@ -202,6 +216,7 @@ export function CallOverlay({
 
   let statusLine: string;
   if (error) statusLine = error;
+  else if (mediaPending && showPermissionHint) statusLine = video ? "Waiting for camera permission…" : "Waiting for microphone permission…";
   else if (incomingRinging) statusLine = video ? "Matrix Chat video call" : "Matrix Chat voice call";
   else if (live) statusLine = formatClock(duration);
   else if (connecting || status === "incoming") statusLine = "Connecting…";
@@ -226,6 +241,13 @@ export function CallOverlay({
       </button>
     );
   }
+
+  const permissionNote =
+    mediaPending && showPermissionHint ? (
+      <div className="call-permission-note" role="status">
+        Choose <strong>Allow</strong> when asked to use your {video ? "camera and microphone" : "microphone"}.
+      </div>
+    ) : null;
 
   const bgTint = (
     <div className="call-bg" aria-hidden="true">
@@ -276,6 +298,7 @@ export function CallOverlay({
                 <div className="call-avatar-wrap call-pulse">
                   <Avatar name={peerUsername} avatarUrl={peerAvatarUrl} size={132} />
                 </div>
+                {permissionNote}
               </div>
             )}
             {selfFull && <div className="call-stage-shade" aria-hidden="true" />}
@@ -433,6 +456,7 @@ export function CallOverlay({
             )}
           </div>
           {peerMuted && status === "connected" && <div className="call-peer-muted-note">{peerUsername} muted their mic</div>}
+          {permissionNote}
         </div>
 
         <CallReactionsLayer reactions={reactions} />

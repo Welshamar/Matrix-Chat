@@ -1,4 +1,5 @@
 import type { Socket } from "socket.io-client";
+import { Capacitor } from "@capacitor/core";
 import { ICE_SERVERS } from "./webrtc";
 
 export interface CallClientHandlers {
@@ -17,6 +18,36 @@ export interface CallClientHandlers {
 }
 
 export type CameraFacing = "user" | "environment";
+
+type MediaDevice = "camera" | "microphone" | "camera or microphone";
+
+/** A getUserMedia failure translated into something a person can act on. */
+export class CallMediaError extends Error {
+  constructor(message: string, readonly original: unknown) {
+    super(message);
+    this.name = "CallMediaError";
+  }
+}
+
+// Where to fix a blocked permission differs completely between the Android app
+// and a browser, so say the right thing for each.
+function describeMediaError(err: unknown, device: MediaDevice): CallMediaError {
+  const name = err instanceof DOMException || err instanceof Error ? err.name : "";
+  const native = Capacitor.isNativePlatform();
+  let message: string;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    message = native
+      ? `Allow ${device} access for Matrix Chat in Settings > Apps > Matrix Chat > Permissions.`
+      : `${device[0].toUpperCase()}${device.slice(1)} access is blocked. Allow it from the lock icon in the address bar, then try again.`;
+  } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+    message = `No ${device} found on this device.`;
+  } else if (name === "NotReadableError" || name === "AbortError") {
+    message = `Your ${device} is being used by another app.`;
+  } else {
+    message = `Couldn't access your ${device}.`;
+  }
+  return new CallMediaError(message, err);
+}
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
@@ -41,6 +72,7 @@ export class CallClient {
   private videoSender: RTCRtpSender | null = null;
   private facing: CameraFacing = "user";
   private cameraOn = false;
+  private disposed = false;
 
   constructor(
     private socket: Socket,
@@ -103,8 +135,39 @@ export class CallClient {
   }
 
   private async acquireVideoTrack(facing: CameraFacing): Promise<MediaStreamTrack> {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(facing) });
+    const stream = await this.getMedia({ video: videoConstraints(facing) }, "camera");
     return stream.getVideoTracks()[0];
+  }
+
+  // getUserMedia can sit on a permission prompt for as long as the person
+  // takes to answer. If the call was ended in the meantime, the stream that
+  // finally arrives must not be kept -- otherwise the camera/mic would stay
+  // switched on for a call that no longer exists.
+  private async getMedia(constraints: MediaStreamConstraints, device: MediaDevice = "camera or microphone"): Promise<MediaStream> {
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      throw this.disposed ? err : describeMediaError(err, device);
+    }
+    if (this.disposed) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error("Call ended.");
+    }
+    return stream;
+  }
+
+  // A combined camera+mic request fails with one opaque error, so probe the
+  // microphone on its own to tell the person which of the two is the problem.
+  private async explainMediaFailure(failure: unknown): Promise<Error> {
+    const cause = failure instanceof CallMediaError ? failure.original : failure;
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+      probe.getTracks().forEach((t) => t.stop());
+      return describeMediaError(cause, "camera");
+    } catch (micErr) {
+      return describeMediaError(micErr, "microphone");
+    }
   }
 
   // `cameraRequired`: a caller placing a video call fails outright if there's
@@ -114,13 +177,14 @@ export class CallClient {
     let stream: MediaStream;
     if (this.video) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS, video: videoConstraints(this.facing) });
+        stream = await this.getMedia({ audio: AUDIO_CONSTRAINTS, video: videoConstraints(this.facing) });
       } catch (err) {
-        if (cameraRequired) throw new Error("Couldn't access your camera or microphone.");
-        stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+        if (this.disposed) throw err;
+        if (cameraRequired) throw await this.explainMediaFailure(err);
+        stream = await this.getMedia({ audio: AUDIO_CONSTRAINTS }, "microphone");
       }
     } else {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+      stream = await this.getMedia({ audio: AUDIO_CONSTRAINTS }, "microphone");
     }
 
     this.localStream = stream;
@@ -247,6 +311,7 @@ export class CallClient {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.pc?.close();
     this.pc = null;
