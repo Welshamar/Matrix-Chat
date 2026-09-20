@@ -7,6 +7,10 @@ export interface CallClientHandlers {
   // after the call was already under way — the caller/callee flows handle
   // their own reject/no-answer cases separately.
   onFailure: (reason: string) => void;
+  // Fired when the peer connection is actually up (ICE connected) -- as
+  // opposed to onRemoteStream, which fires as soon as the remote track is
+  // negotiated, before any audio can flow. May fire more than once.
+  onConnected?: () => void;
 }
 
 /** One RTCPeerConnection plus the local mic stream backing a single 1:1
@@ -17,6 +21,9 @@ export class CallClient {
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  // Remembered here (not just on the tracks) so a mute toggled before the mic
+  // has been acquired -- e.g. while the call is still ringing -- still applies.
+  private muted = false;
 
   constructor(
     private socket: Socket,
@@ -42,8 +49,17 @@ export class CallClient {
       if (e.streams[0]) this.handlers.onRemoteStream(e.streams[0]);
     };
     pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") this.handlers.onConnected?.();
       if (pc.connectionState === "failed") {
         this.handlers.onFailure("Call connection failed.");
+      }
+    };
+    // Positive-only on purpose: iceConnectionState can flicker through
+    // "failed" on a connection that goes on to succeed, so it is never used to
+    // declare failure -- only as a second signal that we're connected.
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        this.handlers.onConnected?.();
       }
     };
     this.pc = pc;
@@ -55,6 +71,7 @@ export class CallClient {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     this.localStream = stream;
+    stream.getAudioTracks().forEach((track) => (track.enabled = !this.muted));
     stream.getTracks().forEach((track) => pc.addTrack(track, stream));
   }
 
@@ -110,6 +127,7 @@ export class CallClient {
   }
 
   setMuted(muted: boolean): void {
+    this.muted = muted;
     this.localStream?.getAudioTracks().forEach((track) => (track.enabled = !muted));
   }
 

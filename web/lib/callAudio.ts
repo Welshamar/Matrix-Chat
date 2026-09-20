@@ -3,6 +3,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 interface CallAudioPlugin {
   start(): Promise<void>;
   stop(): Promise<void>;
+  setSpeaker(options: { on: boolean }): Promise<void>;
 }
 
 const CallAudio = registerPlugin<CallAudioPlugin>("CallAudio");
@@ -26,5 +27,17 @@ export async function stopCallAudioRouting(): Promise<void> {
     await CallAudio.stop();
   } catch (err) {
     console.error("Failed to restore call audio routing:", err);
+  }
+}
+
+// Speaker / earpiece toggle for the call screen. Only meaningful on the native
+// Android shell (a browser has no earpiece route to switch), so callers hide
+// the button elsewhere.
+export async function setCallSpeaker(on: boolean): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await CallAudio.setSpeaker({ on });
+  } catch (err) {
+    console.error("Failed to switch call audio route:", err);
   }
 }

@@ -34,6 +34,18 @@ public class CallAudioPlugin extends Plugin {
         call.resolve();
     }
 
+    // The speaker button on the call screen. start() defaults the route to
+    // speakerphone (an earpiece route is near-inaudible unless the phone is at
+    // your ear); this lets the person switch to the earpiece and back.
+    @PluginMethod
+    public void setSpeaker(PluginCall call) {
+        AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager != null) {
+            audioManager.setSpeakerphoneOn(call.getBoolean("on", true));
+        }
+        call.resolve();
+    }
+
     @PluginMethod
     public void stop(PluginCall call) {
         AudioManager audioManager = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);

@@ -1,6 +1,13 @@
 import { Server, Socket } from "socket.io";
 import { isUserOnline, userRoom } from "./signal.gateway";
-import { CallAnswerPayload, CallEndPayload, CallIcePayload, CallInvitePayload, SocketAck } from "../types/signal.types";
+import {
+  CallAnswerPayload,
+  CallEndPayload,
+  CallIcePayload,
+  CallInvitePayload,
+  CallMutePayload,
+  SocketAck,
+} from "../types/signal.types";
 
 function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
@@ -19,6 +26,11 @@ function isValidAnswerPayload(p: unknown): p is CallAnswerPayload {
 function isValidIcePayload(p: unknown): p is CallIcePayload {
   const v = p as Partial<CallIcePayload> | null;
   return !!(v && isNonEmptyString(v.toUserId) && isNonEmptyString(v.callId) && v.candidate);
+}
+
+function isValidMutePayload(p: unknown): p is CallMutePayload {
+  const v = p as Partial<CallMutePayload> | null;
+  return !!(v && isNonEmptyString(v.toUserId) && isNonEmptyString(v.callId) && typeof v.muted === "boolean");
 }
 
 function isValidEndPayload(p: unknown): p is CallEndPayload {
@@ -67,6 +79,16 @@ export function registerCallGateway(io: Server): void {
         fromUserId: userId,
         callId: payload.callId,
         candidate: payload.candidate,
+      });
+    });
+
+    // So the other side can show a "muted" indicator, like WhatsApp does.
+    socket.on("call:mute", (payload: unknown) => {
+      if (!isValidMutePayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:peer-muted", {
+        fromUserId: userId,
+        callId: payload.callId,
+        muted: payload.muted,
       });
     });
 

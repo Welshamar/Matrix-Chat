@@ -1,6 +1,6 @@
 const PALETTE = ["#00a884", "#e17076", "#7bc862", "#65aadd", "#a695e7", "#ee7aae", "#e0a542"];
 
-function colorFor(seed: string): string {
+export function avatarColorFor(seed: string): string {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash << 5) - hash + seed.charCodeAt(i);
   return PALETTE[Math.abs(hash) % PALETTE.length];
@@ -21,7 +21,7 @@ export function Avatar({ name, avatarUrl, size = 40 }: AvatarProps) {
 
   const initial = name.trim().charAt(0).toUpperCase() || "?";
   return (
-    <div className="avatar avatar-fallback" style={{ ...style, background: colorFor(name) }}>
+    <div className="avatar avatar-fallback" style={{ ...style, background: avatarColorFor(name) }}>
       {initial}
     </div>
   );

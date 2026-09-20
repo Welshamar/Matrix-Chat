@@ -36,7 +36,7 @@ import {
 import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
 import { RingtonePlayer } from "@/lib/ringtone";
-import { startCallAudioRouting, stopCallAudioRouting } from "@/lib/callAudio";
+import { setCallSpeaker, startCallAudioRouting, stopCallAudioRouting } from "@/lib/callAudio";
 import { playReceivedTone, playSentTone } from "@/lib/messageTone";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
@@ -122,6 +122,13 @@ export default function ChatPage() {
   );
   const [callDuration, setCallDuration] = useState(0);
   const [callMuted, setCallMuted] = useState(false);
+  const [callPeerMuted, setCallPeerMuted] = useState(false);
+  // Speakerphone is the default route (see CallAudioPlugin.start) -- an earpiece
+  // route is near-inaudible unless the phone is held to the ear.
+  const [callSpeakerOn, setCallSpeakerOn] = useState(true);
+  const [callRinging, setCallRinging] = useState(false);
+  const [callConnecting, setCallConnecting] = useState(false);
+  const [callMinimized, setCallMinimized] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [callNeedsAudioUnlock, setCallNeedsAudioUnlock] = useState(false);
 
@@ -147,6 +154,9 @@ export default function ChatPage() {
   // handleAcceptCall.
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const callDisconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callConnectedRef = useRef(false);
+  const callConnectFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const callMinimizedRef = useRef(false);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const callTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callRingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -227,6 +237,9 @@ export default function ChatPage() {
   useEffect(() => {
     imageViewerOpenRef.current = viewerMessage !== null;
   }, [viewerMessage]);
+  useEffect(() => {
+    callMinimizedRef.current = callMinimized;
+  }, [callMinimized]);
 
   // Mirrors WhatsApp: back closes whatever's open (innermost first), then
   // backs out of an open thread to the chat list, and only exits the app
@@ -268,7 +281,14 @@ export default function ChatPage() {
       // An active call overlay intentionally swallows back rather than
       // hanging up or exiting — accidentally dropping a call is worse than
       // a no-op here.
-      if (callStatusRef.current) return;
+      // Back during a call minimizes it to the green "return to call" bar
+      // (like WhatsApp); once minimized, back navigates normally. An incoming
+      // call that hasn't been answered swallows it -- dropping or ignoring a
+      // ring by accident is worse than a no-op.
+      if (callStatusRef.current && !callMinimizedRef.current) {
+        if (callStatusRef.current !== "incoming") setCallMinimized(true);
+        return;
+      }
       if (activePeerRef.current || activeGroupRef.current) {
         handleBackToList();
         return;
@@ -655,11 +675,18 @@ export default function ChatPage() {
 
       socket.on("call:answered", async (evt: CallAnsweredEvent) => {
         if (callIdRef.current !== evt.callId) return;
+        callRingtoneRef.current?.stop();
+        setCallConnecting(true);
         try {
           await callClientRef.current?.applyAnswer(evt.sdp);
         } catch {
           failCall("Call failed to connect.");
         }
+      });
+
+      socket.on("call:peer-muted", (evt: { callId: string; muted: boolean }) => {
+        if (callIdRef.current !== evt.callId) return;
+        setCallPeerMuted(evt.muted);
       });
 
       socket.on("call:ice", (evt: CallIceEvent) => {
@@ -1220,8 +1247,10 @@ export default function ChatPage() {
     }
   }
 
+  // The remote track is negotiated -- start playing it. This fires before any
+  // audio can actually flow, so it deliberately does NOT flip the screen to
+  // "connected"; that waits for the peer connection itself (handleCallConnected).
   function attachRemoteStream(stream: MediaStream) {
-    callRingtoneRef.current?.stop();
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = stream;
       remoteAudioRef.current.play().catch(() => {
@@ -1231,10 +1260,26 @@ export default function ChatPage() {
         setCallNeedsAudioUnlock(true);
       });
     }
+    // Safety net: if the WebView never reports the connection as up even
+    // though the track arrived, don't sit on "Connecting…" forever.
+    if (callConnectFallbackRef.current) clearTimeout(callConnectFallbackRef.current);
+    callConnectFallbackRef.current = setTimeout(handleCallConnected, 8000);
+  }
+
+  // The audio connection is really up: stop ringing, start the clock.
+  function handleCallConnected() {
+    if (callConnectedRef.current || !callIdRef.current) return;
+    callConnectedRef.current = true;
+    if (callConnectFallbackRef.current) {
+      clearTimeout(callConnectFallbackRef.current);
+      callConnectFallbackRef.current = null;
+    }
+    callRingtoneRef.current?.stop();
     if (callRingTimeoutRef.current) {
       clearTimeout(callRingTimeoutRef.current);
       callRingTimeoutRef.current = null;
     }
+    setCallConnecting(false);
     setCallDuration(0);
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     callTimerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
@@ -1256,6 +1301,9 @@ export default function ChatPage() {
     callIdRef.current = null;
     pendingOfferRef.current = null;
     pendingIceCandidatesRef.current = [];
+    callConnectedRef.current = false;
+    if (callConnectFallbackRef.current) clearTimeout(callConnectFallbackRef.current);
+    callConnectFallbackRef.current = null;
     if (callDisconnectTimeoutRef.current) clearTimeout(callDisconnectTimeoutRef.current);
     callDisconnectTimeoutRef.current = null;
     if (callTimerRef.current) clearInterval(callTimerRef.current);
@@ -1267,6 +1315,11 @@ export default function ChatPage() {
     setCallPeer(null);
     setCallDuration(0);
     setCallMuted(false);
+    setCallPeerMuted(false);
+    setCallSpeakerOn(true);
+    setCallRinging(false);
+    setCallConnecting(false);
+    setCallMinimized(false);
     setCallNeedsAudioUnlock(false);
   }
 
@@ -1275,6 +1328,7 @@ export default function ChatPage() {
   // and then tear the whole thing down.
   function failCall(message: string) {
     callRingtoneRef.current?.stop();
+    setCallMinimized(false);
     setCallError(message);
     if (callErrorTimeoutRef.current) clearTimeout(callErrorTimeoutRef.current);
     callErrorTimeoutRef.current = setTimeout(() => {
@@ -1296,6 +1350,7 @@ export default function ChatPage() {
     const client = new CallClient(socket, peer.peerId, callId, {
       onRemoteStream: attachRemoteStream,
       onFailure: failCall,
+      onConnected: handleCallConnected,
     });
     callClientRef.current = client;
 
@@ -1318,6 +1373,7 @@ export default function ChatPage() {
         failCall(ack.error ?? "Couldn't place the call.");
         return;
       }
+      setCallRinging(true);
       if (!callRingtoneRef.current) callRingtoneRef.current = new RingtonePlayer();
       callRingtoneRef.current.start("outgoing");
       callRingTimeoutRef.current = setTimeout(() => {
@@ -1332,6 +1388,7 @@ export default function ChatPage() {
   async function handleAcceptCall() {
     if (!socketRef.current || !callPeer || !callIdRef.current || !pendingOfferRef.current) return;
     callRingtoneRef.current?.stop();
+    setCallConnecting(true);
     const socket = socketRef.current;
     const peerUserId = callPeer.userId;
     const callId = callIdRef.current;
@@ -1340,6 +1397,7 @@ export default function ChatPage() {
     const client = new CallClient(socket, peerUserId, callId, {
       onRemoteStream: attachRemoteStream,
       onFailure: failCall,
+      onConnected: handleCallConnected,
     });
     callClientRef.current = client;
 
@@ -1368,7 +1426,8 @@ export default function ChatPage() {
 
   function handleDeclineCall() {
     if (socketRef.current && callPeer && callIdRef.current) {
-      const event = callStatus === "incoming" ? "call:reject" : "call:end";
+      // Once the callee has tapped Accept the call is theirs to end, not reject.
+      const event = callStatus === "incoming" && !callConnecting ? "call:reject" : "call:end";
       socketRef.current.emit(event, { toUserId: callPeer.userId, callId: callIdRef.current });
     }
     resetCallState();
@@ -1378,6 +1437,16 @@ export default function ChatPage() {
     const next = !callMuted;
     callClientRef.current?.setMuted(next);
     setCallMuted(next);
+    // Let the other side show its "muted" indicator.
+    if (socketRef.current && callPeer && callIdRef.current) {
+      socketRef.current.emit("call:mute", { toUserId: callPeer.userId, callId: callIdRef.current, muted: next });
+    }
+  }
+
+  function toggleCallSpeaker() {
+    const next = !callSpeakerOn;
+    setCallSpeakerOn(next);
+    setCallSpeaker(next);
   }
 
   async function handleCreateGroup(name: string, memberUserIds: string[]) {
@@ -1473,7 +1542,7 @@ export default function ChatPage() {
   const activeKey = activeGroup?.groupId ?? activePeer?.peerId ?? null;
 
   return (
-    <div className={`chat-shell ${activePeer || activeGroup ? "has-active-thread" : ""}`}>
+    <div className={`chat-shell ${activePeer || activeGroup ? "has-active-thread" : ""} ${callStatus && callMinimized ? "call-minimized" : ""}`}>
       <aside className="sidebar">
         <div className="sidebar-brand-bar">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1816,11 +1885,20 @@ export default function ChatPage() {
           peerAvatarUrl={callPeer.avatarUrl}
           duration={callDuration}
           muted={callMuted}
+          peerMuted={callPeerMuted}
+          speakerOn={callSpeakerOn}
+          showSpeaker={Capacitor.isNativePlatform()}
+          ringing={callRinging}
+          connecting={callConnecting}
+          minimized={callMinimized}
           error={callError}
           needsAudioUnlock={callNeedsAudioUnlock}
           onAccept={handleAcceptCall}
           onDecline={handleDeclineCall}
           onToggleMute={toggleCallMute}
+          onToggleSpeaker={toggleCallSpeaker}
+          onMinimize={() => setCallMinimized(true)}
+          onRestore={() => setCallMinimized(false)}
           onUnlockAudio={handleUnlockCallAudio}
         />
       )}

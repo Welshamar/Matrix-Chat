@@ -90,6 +90,12 @@ export interface CallIcePayload {
   candidate: unknown;
 }
 
+export interface CallMutePayload {
+  toUserId: string;
+  callId: string;
+  muted: boolean;
+}
+
 export interface CallEndPayload {
   toUserId: string;
   callId: string;

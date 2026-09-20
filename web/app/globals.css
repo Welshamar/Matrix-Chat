@@ -1980,29 +1980,131 @@ input {
   }
 }
 
-/* --- Voice calls --- */
+/* --- Voice calls (WhatsApp-style full-screen call) --- */
 
-.call-overlay {
+.call-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.call-card {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #fff;
+  background: #0a1014;
+}
+
+/* On a wide desktop window it's a centred phone-shaped panel instead. */
+@media (min-width: 701px) {
+  .call-card {
+    width: 400px;
+    height: min(740px, 92vh);
+    border-radius: 22px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  }
+}
+
+.call-bg,
+.call-bg-photo,
+.call-bg-tint {
+  position: absolute;
+  inset: 0;
+}
+
+.call-bg-photo {
+  background-size: cover;
+  background-position: center;
+  filter: blur(30px) brightness(0.5) saturate(1.2);
+  transform: scale(1.25);
+}
+
+.call-topbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 8px 0;
+}
+
+.call-topbar-btn {
+  width: 48px;
+  height: 48px;
+  border: none;
+  background: none;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.call-e2e {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.call-main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  text-align: center;
-  width: 320px;
-  max-width: 90%;
-  padding: 32px 24px;
+  padding: 26px 20px 0;
+  min-height: 0;
 }
 
-.call-overlay-avatar-wrap {
+.call-name {
+  font-size: 30px;
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-status {
+  margin-top: 6px;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.82);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-audio-unlock {
+  margin-top: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 9px 18px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.call-avatar-wrap {
   position: relative;
+  margin-top: 44px;
 }
 
 .call-pulse::after {
   content: "";
   position: absolute;
-  inset: -8px;
+  inset: -10px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
-  animation: call-pulse-ring 1.6s ease-out infinite;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  animation: call-pulse-ring 1.8s ease-out infinite;
 }
 
 @keyframes call-pulse-ring {
@@ -2011,73 +2113,150 @@ input {
     opacity: 0.8;
   }
   100% {
-    transform: scale(1.35);
+    transform: scale(1.32);
     opacity: 0;
   }
 }
 
-.call-overlay-name {
+.call-avatar-muted {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: #1c272d;
+  color: #fff;
+  border: 3px solid #0a1014;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.call-avatar-muted svg {
+  width: 22px;
+  height: 22px;
+}
+
+.call-peer-muted-note {
   margin-top: 16px;
-  font-size: 19px;
-  font-weight: 700;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.7);
 }
 
-.call-overlay-status {
-  margin-top: 4px;
-  font-size: 13.5px;
-  color: var(--text-dim);
+/* Bottom control bar: a rounded dark sheet holding round buttons. */
+.call-controls {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  gap: 12px;
+  padding: 22px 16px calc(30px + env(safe-area-inset-bottom));
+  background: rgba(26, 36, 42, 0.94);
+  border-radius: 30px 30px 0 0;
 }
 
-.call-audio-unlock {
-  margin-top: 14px;
-  background: var(--accent);
-  color: var(--accent-contrast);
+.call-ctl-btn {
+  width: 64px;
+  height: 64px;
   border: none;
-  border-radius: 20px;
-  padding: 8px 16px;
-  font-size: 13px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+/* Toggled on (muted / speaker on): solid white with a dark icon. */
+.call-ctl-btn.on {
+  background: #fff;
+  color: #1a242a;
+}
+
+.call-ctl-end {
+  background: #e5384f;
+  color: #fff;
+}
+
+.call-ctl-accept {
+  background: #25d366;
+  color: #fff;
+}
+
+.call-controls-incoming {
+  justify-content: space-around;
+  padding-bottom: calc(38px + env(safe-area-inset-bottom));
+}
+
+.call-answer-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.call-answer-col .call-ctl-btn {
+  width: 72px;
+  height: 72px;
+}
+
+.call-ctl-label {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.call-ctl-accept {
+  animation: call-accept-bounce 1.4s ease-in-out infinite;
+}
+
+@keyframes call-accept-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+/* Minimized call: a green bar across the top, and the app slides down. */
+.call-mini-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  z-index: 65;
+  border: none;
+  background: #1fa855;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 
-.call-overlay-actions {
+.call-mini-meta {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 24px;
-  margin-top: 32px;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
 }
 
-.call-btn {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  flex-shrink: 0;
+.call-mini-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
 }
 
-.call-btn-accept {
-  background: #3ddc84;
-  color: #06280f;
-}
-
-.call-btn-reject {
-  background: var(--danger);
-  color: #2b0505;
-}
-
-.call-btn-mute {
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.call-btn-mute.armed {
-  background: var(--accent);
-  color: var(--accent-contrast);
+.chat-shell.call-minimized {
+  padding-top: 40px;
 }
 
 .exit-prompt-toast {
@@ -2281,16 +2460,6 @@ input {
     font-size: 13px;
   }
 
-  /* Calls */
-  .call-overlay-name {
-    font-size: 23px;
-  }
-  .call-overlay-status {
-    font-size: 16px;
-  }
-  .call-audio-unlock {
-    font-size: 15px;
-  }
   .exit-prompt-toast {
     font-size: 15px;
   }
