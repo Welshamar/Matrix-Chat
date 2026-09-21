@@ -1,3 +1,5 @@
+import type { AttachmentRef } from "./attachments";
+
 // A reply-to reference or file metadata is packed into the plaintext itself
 // (before Signal encryption) rather than sent as separate metadata, since
 // the server only ever sees opaque ciphertext. The sentinel prefix lets the
@@ -15,6 +17,10 @@ export interface FileMeta {
   name: string;
   mime: string;
   size: number;
+  // Present for a heavy file: the bytes live on the server as an encrypted
+  // attachment and this is the pointer + key to fetch and unlock them (the
+  // message body is then empty). Absent for a small file sent inline.
+  att?: AttachmentRef;
 }
 
 export interface EnvelopeExtras {

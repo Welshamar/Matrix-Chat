@@ -11,6 +11,49 @@ function mimeOf(dataUrl: string): string {
   return match ? match[1] : "application/octet-stream";
 }
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read the file."));
+    reader.onload = () => resolve(base64Of(reader.result as string));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Multiple of 3 so each slice's base64 has no padding and the pieces concatenate
+// cleanly. Written piece by piece so a large video never becomes one giant
+// base64 string in memory (which crashes an Android WebView well below 100 MB).
+const NATIVE_WRITE_STEP = 3 * 1024 * 1024;
+
+// `source` is a data: or blob: URL (both are fetchable), so the same path
+// serves small inline files and large decrypted attachments.
+async function writeNative(source: string, filename: string, directory: Directory): Promise<string> {
+  let blob: Blob;
+  try {
+    blob = await (await fetch(source)).blob();
+  } catch {
+    // fetch() on a data URL can be refused in some WebViews -- small files
+    // still fall back to writing the base64 directly.
+    const written = await Filesystem.writeFile({ path: filename, data: base64Of(source), directory, recursive: true });
+    return written.uri;
+  }
+
+  if (blob.size <= NATIVE_WRITE_STEP) {
+    const written = await Filesystem.writeFile({ path: filename, data: await blobToBase64(blob), directory, recursive: true });
+    return written.uri;
+  }
+  let uri = "";
+  for (let offset = 0; offset < blob.size; offset += NATIVE_WRITE_STEP) {
+    const data = await blobToBase64(blob.slice(offset, offset + NATIVE_WRITE_STEP));
+    if (offset === 0) {
+      uri = (await Filesystem.writeFile({ path: filename, data, directory, recursive: true })).uri;
+    } else {
+      await Filesystem.appendFile({ path: filename, data, directory });
+    }
+  }
+  return uri;
+}
+
 // A plain <a download> on a data: URL is unreliable inside an Android
 // WebView (it silently no-ops on a lot of devices/OS versions) even though
 // it works fine in a real browser — so the native build writes through
@@ -20,12 +63,7 @@ function mimeOf(dataUrl: string): string {
 export async function saveDataUrlFile(dataUrl: string, filename: string): Promise<{ ok: boolean; message: string }> {
   if (Capacitor.isNativePlatform()) {
     try {
-      await Filesystem.writeFile({
-        path: filename,
-        data: base64Of(dataUrl),
-        directory: Directory.Documents,
-        recursive: true,
-      });
+      await writeNative(dataUrl, filename, Directory.Documents);
       return { ok: true, message: `Saved "${filename}" to Documents.` };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Couldn't save the file." };
@@ -53,13 +91,8 @@ export async function saveDataUrlFile(dataUrl: string, filename: string): Promis
 export async function shareDataUrlFile(dataUrl: string, filename: string): Promise<{ ok: boolean; message: string }> {
   if (Capacitor.isNativePlatform()) {
     try {
-      const written = await Filesystem.writeFile({
-        path: filename,
-        data: base64Of(dataUrl),
-        directory: Directory.Cache,
-        recursive: true,
-      });
-      await Share.share({ title: filename, url: written.uri });
+      const uri = await writeNative(dataUrl, filename, Directory.Cache);
+      await Share.share({ title: filename, url: uri });
       return { ok: true, message: "" };
     } catch (err) {
       // A user backing out of the share sheet also rejects this promise —

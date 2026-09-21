@@ -39,6 +39,7 @@ model User {
   sentMessages     Message[]     @relation("SentMessages")
   receivedMessages Message[]     @relation("ReceivedMessages")
   groupMemberships GroupMember[]
+  attachments      Attachment[]
 }
 
 // Long-term Curve25519 identity public key (Signal Protocol IdentityKey).
@@ -155,4 +156,37 @@ model GroupMember {
 
   @@unique([groupId, userId])
   @@index([userId])
+}
+
+// Large files (videos, documents, full-size photos) don't travel through the
+// realtime socket: the sender encrypts them client-side in chunks with a random
+// key, uploads the ciphertext over plain HTTP, and only a small pointer + key
+// goes inside the (Signal-encrypted) chat message. The server therefore only
+// ever holds opaque encrypted bytes, and drops them after a retention window
+// (see attachments.controller.ts).
+model Attachment {
+  id          String   @id @default(uuid())
+  ownerId     String
+  totalChunks Int
+  // Declared size while uploading, actual stored bytes once complete.
+  size        Int
+  complete    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  owner  User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  chunks AttachmentChunk[]
+
+  @@index([ownerId])
+  @@index([createdAt])
+}
+
+model AttachmentChunk {
+  attachmentId String
+  index        Int
+  length       Int
+  data         Bytes
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  @@id([attachmentId, index])
 }

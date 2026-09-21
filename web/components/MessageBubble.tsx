@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { LocalMessage } from "@/lib/localDb";
 import { saveDataUrlFile, shareDataUrlFile } from "@/lib/saveFile";
+import { useAttachment } from "@/lib/useAttachment";
 import { VoiceMessagePlayer } from "./VoiceMessagePlayer";
 
 // How long a just-opened view-once photo stays visible before collapsing
@@ -114,6 +115,9 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
   const [dragX, setDragX] = useState(0);
   const [swiping, setSwiping] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  // Heavy files live on the server as an encrypted attachment; this tracks
+  // whether the decrypted copy is on this device yet (and downloads it on demand).
+  const attachment = useAttachment(message);
 
   const dragState = useRef<{ pointerId: number; startX: number; startY: number; active: boolean; locked: boolean } | null>(
     null
@@ -133,27 +137,46 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
   const isViewOnce = !!message.viewOnce && !isVoice;
   const isIncomingUnopened = isViewOnce && message.direction === "in" && !message.viewOnceOpened && !revealed;
 
+  function flashSaveStatus(text: string) {
+    setSaveStatus(text);
+    if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
+    saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+  }
+
+  // Where the file's bytes can be read from: the inline data URL for a small
+  // file, or a URL for the decrypted attachment (downloading it first if it
+  // isn't on this device yet). Null if that download failed.
+  async function resolveFileSource(): Promise<string | null> {
+    if (!message.file?.att) return message.body;
+    const blob = attachment.blob ?? (await attachment.ensure());
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
+    return url;
+  }
+
   async function handleDownload() {
     if (!message.file) return;
-    setSaveStatus("Saving...");
-    const result = await saveDataUrlFile(message.body, message.file.name);
-    if (result.message) {
-      setSaveStatus(result.message);
-      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
-      saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
-    } else {
-      setSaveStatus(null);
+    setSaveStatus(message.file.att && !attachment.blob ? "Downloading..." : "Saving...");
+    const source = await resolveFileSource();
+    if (!source) {
+      flashSaveStatus("Couldn't download the file. Check your connection and try again.");
+      return;
     }
+    const result = await saveDataUrlFile(source, message.file.name);
+    if (result.message) flashSaveStatus(result.message);
+    else setSaveStatus(null);
   }
 
   async function handleShare() {
     if (!message.file) return;
-    const result = await shareDataUrlFile(message.body, message.file.name);
-    if (!result.ok && result.message) {
-      setSaveStatus(result.message);
-      if (saveStatusTimeoutRef.current) clearTimeout(saveStatusTimeoutRef.current);
-      saveStatusTimeoutRef.current = setTimeout(() => setSaveStatus(null), 4000);
+    const source = await resolveFileSource();
+    if (!source) {
+      flashSaveStatus("Couldn't download the file. Check your connection and try again.");
+      return;
     }
+    const result = await shareDataUrlFile(source, message.file.name);
+    if (!result.ok && result.message) flashSaveStatus(result.message);
   }
 
   function handleTap() {
@@ -248,7 +271,38 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
     bubbleClass += " voice-bubble";
   } else if (isFile && message.file) {
     const file = message.file;
-    if (file.mime.startsWith("image/")) {
+    if (file.mime.startsWith("image/") && file.att && !attachment.url) {
+      // Photo is on the server but not on this device yet (still downloading,
+      // failed, or too big to fetch without asking).
+      const busy = attachment.status === "downloading" || attachment.status === "checking";
+      body = (
+        <div className="file-image-wrap">
+          <button
+            type="button"
+            className="file-image-pending"
+            disabled={busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              attachment.ensure();
+            }}
+            aria-label={`Download ${file.name}`}
+          >
+            {busy ? (
+              <>
+                <span className="file-spinner" aria-hidden="true" />
+                <span>{attachment.status === "downloading" ? `${Math.round(attachment.progress * 100)}%` : "Loading…"}</span>
+              </>
+            ) : attachment.status === "error" ? (
+              <span>{attachment.error ?? "Couldn't load the photo."} Tap to retry.</span>
+            ) : (
+              <span>Tap to download · {formatFileSize(file.size)}</span>
+            )}
+          </button>
+        </div>
+      );
+      bubbleClass += " file-bubble file-bubble-image";
+    } else if (file.mime.startsWith("image/")) {
+      const imageSrc = file.att ? attachment.url : message.body;
       body = (
         <div className="file-image-wrap">
           <button
@@ -256,11 +310,11 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
             className="file-image-link"
             onClick={(e) => {
               e.stopPropagation();
-              onViewImage?.(message);
+              onViewImage?.(file.att ? { ...message, body: imageSrc ?? "" } : message);
             }}
             aria-label={`Open ${file.name}`}
           >
-            <img src={message.body} alt={file.name} className="file-image" />
+            <img src={imageSrc ?? ""} alt={file.name} className="file-image" />
           </button>
           <div className="file-image-actions">
             <button
@@ -300,6 +354,15 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
           <span className="file-card-info">
             <span className="file-card-name">{file.name}</span>
             <span className="file-card-size">{formatFileSize(file.size)}</span>
+            {attachment.status === "downloading" && (
+              <span className="file-transfer">
+                <span className="file-transfer-bar">
+                  <span className="file-transfer-fill" style={{ width: `${Math.round(attachment.progress * 100)}%` }} />
+                </span>
+                <span className="file-transfer-pct">{Math.round(attachment.progress * 100)}%</span>
+              </span>
+            )}
+            {attachment.status === "error" && !saveStatus && <span className="file-save-status">{attachment.error}</span>}
             {saveStatus && <span className="file-save-status">{saveStatus}</span>}
           </span>
           <span className="file-card-actions">
@@ -322,6 +385,7 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
                 e.stopPropagation();
                 handleDownload();
               }}
+              disabled={attachment.status === "downloading"}
               aria-label="Download file"
               title="Download"
             >

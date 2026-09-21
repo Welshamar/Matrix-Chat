@@ -1,4 +1,5 @@
 import { LocalMessage } from "@/lib/localDb";
+import { useAttachment } from "@/lib/useAttachment";
 import { Avatar } from "./Avatar";
 
 interface ContactDetailsPanelProps {
@@ -11,6 +12,19 @@ interface ContactDetailsPanelProps {
 }
 
 const MEDIA_GRID_LIMIT = 9;
+
+// A heavy photo isn't in message.body -- it's the decrypted attachment, which
+// the hook resolves from this device's copy (it's downloaded in the thread).
+function MediaThumb({ message }: { message: LocalMessage }) {
+  const attachment = useAttachment(message);
+  const src = message.file?.att ? attachment.url : message.body;
+  if (!src) return <span className="contact-details-media-pending" aria-hidden="true" />;
+  return (
+    <a href={src} target="_blank" rel="noopener noreferrer">
+      <img src={src} alt={message.file?.name ?? "Shared image"} />
+    </a>
+  );
+}
 
 export function ContactDetailsPanel({ name, avatarUrl, status, messages, onManageGroup, onClose }: ContactDetailsPanelProps) {
   const media = messages
@@ -44,9 +58,7 @@ export function ContactDetailsPanel({ name, avatarUrl, status, messages, onManag
           ) : (
             <div className="contact-details-media-grid">
               {media.map((m) => (
-                <a key={m.id} href={m.body} target="_blank" rel="noopener noreferrer">
-                  <img src={m.body} alt={m.file?.name ?? "Shared image"} />
-                </a>
+                <MediaThumb key={m.id} message={m} />
               ))}
             </div>
           )}

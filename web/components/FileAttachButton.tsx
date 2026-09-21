@@ -1,24 +1,11 @@
 import { useRef, useState } from "react";
-import { FileMeta } from "@/lib/messageEnvelope";
+import { MAX_FILE_BYTES } from "@/lib/attachments";
 
-// Files travel untouched (no resizing or recompression), so this is the
-// ceiling for sending an original. Base64 inflates size by ~4/3 twice over --
-// once as the data URL inside the envelope, once as the encrypted payload --
-// so a frame is ~1.8x the file and has to fit the server's maxHttpBufferSize
-// (40MB). 16MB covers full-resolution phone photos and short clips.
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
-
-function readAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read the selected file."));
-    reader.onload = () => resolve(reader.result as string);
-    reader.readAsDataURL(file);
-  });
-}
-
+// Files travel untouched (no resizing or recompression). Small ones ride inside
+// the message; anything bigger is encrypted in chunks and uploaded separately
+// (see lib/attachments.ts), which is what makes videos and big documents work.
 interface FileAttachButtonProps {
-  onFileSelected: (dataUrl: string, meta: FileMeta) => void;
+  onFileSelected: (file: File) => void;
   disabled?: boolean;
 }
 
@@ -37,12 +24,7 @@ export function FileAttachButton({ onFileSelected, disabled }: FileAttachButtonP
       return;
     }
 
-    try {
-      const dataUrl = await readAsDataUrl(file);
-      onFileSelected(dataUrl, { name: file.name, mime: file.type || "application/octet-stream", size: file.size });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to read the selected file.");
-    }
+    onFileSelected(file);
   }
 
   return (

@@ -2259,6 +2259,115 @@ input {
   padding-top: 40px;
 }
 
+/* --- Heavy file transfer --- */
+
+.transfer-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 10px 6px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--bg-panel-elevated);
+  border-left: 4px solid var(--accent, #25d366);
+}
+
+.transfer-strip-error {
+  border-left-color: #e5384f;
+}
+
+.transfer-strip-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.transfer-strip-name {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-strip-detail {
+  font-size: 12.5px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.65));
+}
+
+.transfer-strip-error .transfer-strip-detail {
+  color: #ff8a98;
+}
+
+.transfer-strip-bar,
+.file-transfer-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.transfer-strip-fill,
+.file-transfer-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent, #25d366);
+  transition: width 0.2s;
+}
+
+.file-transfer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.file-transfer-bar {
+  flex: 1;
+}
+
+.file-transfer-pct {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.file-image-pending {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 240px;
+  max-width: 100%;
+  min-height: 150px;
+  padding: 16px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: inherit;
+  font-size: 14px;
+  text-align: center;
+}
+
+.file-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent, #25d366);
+  animation: file-spin 0.8s linear infinite;
+}
+
+@keyframes file-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* --- Video calls (Google-Meet-style) + floating emoji reactions --- */
 
 .call-ctl-btn.active {
@@ -2443,6 +2552,66 @@ input {
 
 .call-peer-placeholder .call-permission-note {
   margin-top: 0;
+}
+
+/* Weak / reconnecting connection banner */
+.call-net-banner {
+  position: absolute;
+  top: calc(70px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 18px;
+  background: rgba(32, 33, 36, 0.92);
+  color: #ffd166;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.call-net-banner.reconnecting {
+  color: #ff9f6b;
+}
+
+.call-net-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: call-net-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes call-net-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.call-video.is-reconnecting .call-remote-video {
+  filter: grayscale(0.7) brightness(0.55);
+}
+
+.call-self-paused {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: rgba(32, 33, 36, 0.85);
+  color: #ffd166;
+  font-size: 10.5px;
+  font-weight: 600;
 }
 
 /* Meet-style floating control bar: a dark pill of round buttons. */

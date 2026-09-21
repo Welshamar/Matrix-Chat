@@ -15,6 +15,16 @@ export interface CallClientHandlers {
   // Our own media changed (first acquired, camera turned on/off, camera
   // flipped). Always a fresh MediaStream so the UI's self-view re-attaches.
   onLocalStream?: (stream: MediaStream) => void;
+  // The media path dropped (network blip, Wi-Fi <-> mobile switch) and the client
+  // is trying to bring it back on its own, or has just succeeded. The call is
+  // only failed (onFailure) if that doesn't work within GIVE_UP_MS.
+  onConnectionChange?: (state: "connected" | "reconnecting") => void;
+  // How healthy the link is right now. tier is how much my outgoing video was
+  // cut back to cope: 0 full, 1 reduced, 2 paused (audio only).
+  onQuality?: (quality: { weak: boolean; tier: 0 | 1 | 2 }) => void;
+  // My video was paused / resumed automatically because of the connection (not
+  // because the person turned the camera off), so the other side can say why.
+  onVideoPaused?: (paused: boolean) => void;
 }
 
 export type CameraFacing = "user" | "environment";
@@ -49,6 +59,19 @@ function describeMediaError(err: unknown, device: MediaDevice): CallMediaError {
   return new CallMediaError(message, err);
 }
 
+// --- resilience tuning ---
+// A brief "disconnected" usually heals by itself; only treat it as a drop if it lasts.
+const DISCONNECT_GRACE_MS = 4000;
+// How often to retry an ICE restart while the media path is still down, and how
+// long to keep trying before giving up on the call.
+const RESTART_RETRY_MS = 7000;
+const GIVE_UP_MS = 45000;
+const QUALITY_INTERVAL_MS = 3000;
+// Video send limits per tier. Audio is a few tens of kbit/s, so capping video
+// keeps a weak uplink from starving it (which is what makes a call "break up").
+const VIDEO_BPS = [550_000, 180_000] as const;
+const VIDEO_FPS = [24, 12] as const;
+
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
 // 640x480 @ 24fps: sharp on a phone screen, and light enough to hold up on
@@ -73,6 +96,24 @@ export class CallClient {
   private facing: CameraFacing = "user";
   private cameraOn = false;
   private disposed = false;
+
+  // --- reconnection ---
+  private role: "caller" | "callee" = "caller";
+  private everConnected = false;
+  private reconnecting = false;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private giveUpTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // --- adaptive quality ---
+  private qualityTimer: ReturnType<typeof setInterval> | null = null;
+  private tier: 0 | 1 | 2 = 0;
+  private weak = false;
+  private videoPaused = false;
+  private badStreak = 0;
+  private severeStreak = 0;
+  private goodStreak = 0;
+  private lastInbound = { received: 0, lost: 0 };
 
   constructor(
     private socket: Socket,
@@ -99,7 +140,9 @@ export class CallClient {
   private ensurePeerConnection(): RTCPeerConnection {
     if (this.pc) return this.pc;
 
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    // A couple of pre-gathered candidates makes the first connection (and a
+    // restart) quicker, which matters most on a slow link.
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, iceCandidatePoolSize: 2 });
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         this.socket.emit("call:ice", {
@@ -112,22 +155,253 @@ export class CallClient {
     pc.ontrack = (e) => {
       if (e.streams[0]) this.handlers.onRemoteStream(e.streams[0]);
     };
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") this.handlers.onConnected?.();
-      if (pc.connectionState === "failed") {
-        this.handlers.onFailure("Call connection failed.");
-      }
-    };
+    pc.onconnectionstatechange = () => this.onPcStateChange(pc);
     // Positive-only on purpose: iceConnectionState can flicker through
     // "failed" on a connection that goes on to succeed, so it is never used to
     // declare failure -- only as a second signal that we're connected.
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-        this.handlers.onConnected?.();
+        this.markConnected();
       }
     };
     this.pc = pc;
     return pc;
+  }
+
+  // ---- reconnection ------------------------------------------------------
+  // The media flows peer to peer, so a dropped connection is recoverable without
+  // ending the call: restart ICE (a fresh round of candidate gathering, over the
+  // network as it is now) via the signaling socket while the call screen shows
+  // "Reconnecting". Only if that fails for GIVE_UP_MS is the call ended.
+
+  private onPcStateChange(pc: RTCPeerConnection): void {
+    if (this.disposed) return;
+    const state = pc.connectionState;
+    if (state === "connected") {
+      this.markConnected();
+    } else if (state === "disconnected") {
+      // Often a blip that heals on its own -- give it a moment first.
+      if (!this.disconnectTimer) {
+        this.disconnectTimer = setTimeout(() => {
+          this.disconnectTimer = null;
+          if (!this.disposed && this.pc?.connectionState !== "connected") this.beginReconnect();
+        }, DISCONNECT_GRACE_MS);
+      }
+    } else if (state === "failed") {
+      this.beginReconnect();
+    }
+  }
+
+  private markConnected(): void {
+    if (this.disposed) return;
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+    if (this.reconnecting) {
+      this.reconnecting = false;
+      if (this.giveUpTimer) clearTimeout(this.giveUpTimer);
+      if (this.restartTimer) clearTimeout(this.restartTimer);
+      this.giveUpTimer = null;
+      this.restartTimer = null;
+      this.handlers.onConnectionChange?.("connected");
+    }
+    this.everConnected = true;
+    this.handlers.onConnected?.();
+    this.startQualityMonitor();
+  }
+
+  private beginReconnect(): void {
+    if (this.disposed) return;
+    if (!this.reconnecting) {
+      this.reconnecting = true;
+      this.handlers.onConnectionChange?.("reconnecting");
+      this.giveUpTimer = setTimeout(() => {
+        if (this.reconnecting && !this.disposed) {
+          this.handlers.onFailure(this.everConnected ? "Connection lost." : "Couldn't connect the call.");
+        }
+      }, GIVE_UP_MS);
+    }
+    this.requestRestart();
+  }
+
+  // Keeps trying, on a timer, until the connection is back or the call is given up.
+  private requestRestart(): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    if (this.disposed || !this.reconnecting) return;
+    if (this.pc?.connectionState === "connected") {
+      this.markConnected();
+      return;
+    }
+    this.sendRestart();
+    this.restartTimer = setTimeout(() => this.requestRestart(), RESTART_RETRY_MS);
+  }
+
+  // The original caller owns the offer (so both sides never offer at once);
+  // if the callee is the one that noticed, it asks the caller to do it.
+  private sendRestart(): void {
+    if (this.role === "caller") {
+      this.restartIce().catch(() => {});
+    } else {
+      this.socket.emit("call:restart-request", { toUserId: this.peerUserId, callId: this.callId });
+    }
+  }
+
+  /** Re-negotiates ICE. Only the original caller acts on this; the callee's request just triggers it. */
+  async restartIce(): Promise<void> {
+    const pc = this.pc;
+    if (!pc || this.disposed || this.role !== "caller") return;
+    // Nothing to restart before the call was first answered.
+    if (!pc.remoteDescription) return;
+    if (pc.signalingState !== "stable" && pc.signalingState !== "have-local-offer") return;
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      this.socket.emit("call:restart", { toUserId: this.peerUserId, callId: this.callId, sdp: pc.localDescription ?? offer });
+    } catch {
+      // The next retry will try again.
+    }
+  }
+
+  /** Callee side: the caller restarted ICE -- answer it. */
+  async handleRestartOffer(offer: RTCSessionDescriptionInit): Promise<void> {
+    const pc = this.pc;
+    if (!pc || this.disposed) return;
+    try {
+      if (pc.signalingState !== "stable") await pc.setLocalDescription({ type: "rollback" });
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await this.drainPendingCandidates();
+      this.socket.emit("call:restart-answer", { toUserId: this.peerUserId, callId: this.callId, sdp: pc.localDescription ?? answer });
+    } catch {
+      // The caller keeps retrying while the connection is down.
+    }
+  }
+
+  /** Caller side: the callee's answer to a restart offer. */
+  async applyRestartAnswer(answer: RTCSessionDescriptionInit): Promise<void> {
+    const pc = this.pc;
+    if (!pc || this.disposed || pc.signalingState !== "have-local-offer") return;
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      await this.drainPendingCandidates();
+    } catch {
+      // Stale answer for a restart that was superseded -- ignore.
+    }
+  }
+
+  /** The device's network changed (came back online, switched Wi-Fi/mobile): re-check the path right away instead of waiting for it to time out. */
+  notifyNetworkChange(): void {
+    if (this.disposed || !this.pc?.remoteDescription) return;
+    this.sendRestart();
+  }
+
+  // ---- adaptive quality --------------------------------------------------
+  // Every few seconds the link is sampled (packet loss, round trip time,
+  // available send bandwidth). When it's poor, outgoing video is stepped down --
+  // smaller and slower, then paused entirely -- so the audio keeps flowing, and
+  // stepped back up once it has been healthy for a while. It needs a couple of
+  // bad (or five good) samples in a row so it doesn't flap.
+
+  private startQualityMonitor(): void {
+    if (this.qualityTimer || this.disposed) return;
+    this.qualityTimer = setInterval(() => {
+      this.sampleQuality().catch(() => {});
+    }, QUALITY_INTERVAL_MS);
+  }
+
+  private async sampleQuality(): Promise<void> {
+    const pc = this.pc;
+    if (!pc || this.disposed || pc.connectionState !== "connected") return;
+    const stats = await pc.getStats();
+
+    let received = 0;
+    let lost = 0;
+    let outLoss = 0;
+    let rttMs: number | undefined;
+    let availableBps: number | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    stats.forEach((r: any) => {
+      if (r.type === "inbound-rtp") {
+        received += r.packetsReceived || 0;
+        lost += r.packetsLost || 0;
+      } else if (r.type === "remote-inbound-rtp") {
+        outLoss = Math.max(outLoss, r.fractionLost || 0);
+        if (typeof r.roundTripTime === "number") rttMs = Math.max(rttMs ?? 0, r.roundTripTime * 1000);
+      } else if (r.type === "candidate-pair" && (r.selected || (r.nominated && r.state === "succeeded"))) {
+        if (typeof r.currentRoundTripTime === "number") rttMs = Math.max(rttMs ?? 0, r.currentRoundTripTime * 1000);
+        if (typeof r.availableOutgoingBitrate === "number") availableBps = r.availableOutgoingBitrate;
+      }
+    });
+
+    const dReceived = received - this.lastInbound.received;
+    const dLost = lost - this.lastInbound.lost;
+    this.lastInbound = { received, lost };
+    const inLoss = dReceived + dLost > 20 ? Math.max(0, dLost) / (dReceived + dLost) : 0;
+    const loss = Math.max(inLoss, outLoss);
+
+    // Available send bandwidth only matters while video is actually going out.
+    const sendingVideo = this.cameraOn && !!this.videoSender && this.tier < 2;
+    const bandwidthKnown = sendingVideo && availableBps !== undefined;
+    const severe = loss > 0.2 || (rttMs ?? 0) > 1500 || (bandwidthKnown && (availableBps as number) < 80_000);
+    const weak = severe || loss > 0.08 || (rttMs ?? 0) > 700 || (bandwidthKnown && (availableBps as number) < 200_000);
+
+    this.severeStreak = severe ? this.severeStreak + 1 : 0;
+    this.badStreak = weak ? this.badStreak + 1 : 0;
+    this.goodStreak = weak ? 0 : this.goodStreak + 1;
+
+    let next: 0 | 1 | 2 = this.tier;
+    if (this.severeStreak >= 2) next = 2;
+    else if (this.badStreak >= 2 && this.tier === 0) next = 1;
+    else if (this.goodStreak >= 5 && this.tier > 0) next = (this.tier - 1) as 0 | 1;
+
+    if (next !== this.tier) {
+      this.tier = next;
+      this.goodStreak = 0;
+      if (next < 2) this.severeStreak = 0;
+      await this.applyTier(next);
+      const paused = next === 2;
+      if (paused !== this.videoPaused) {
+        this.videoPaused = paused;
+        this.handlers.onVideoPaused?.(paused);
+      }
+    }
+
+    const weakNow = weak || this.tier > 0;
+    if (weakNow !== this.weak || next !== this.tier) {
+      this.weak = weakNow;
+      this.handlers.onQuality?.({ weak: weakNow, tier: this.tier });
+    }
+  }
+
+  private async applyTier(tier: 0 | 1 | 2): Promise<void> {
+    const sender = this.videoSender;
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      const enc = params.encodings[0];
+      if (tier === 2) {
+        enc.active = false;
+      } else {
+        enc.active = true;
+        enc.maxBitrate = VIDEO_BPS[tier];
+        enc.maxFramerate = VIDEO_FPS[tier];
+        enc.scaleResolutionDownBy = tier === 0 ? 1 : 2;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (params as any).degradationPreference = "balanced";
+      await sender.setParameters(params);
+    } catch {
+      // Not every browser accepts every field; the defaults still work.
+    }
+  }
+
+  /** Current quality tier, so the UI can be initialised correctly after a re-render. */
+  get isVideoPaused(): boolean {
+    return this.videoPaused;
   }
 
   private publishLocalStream(): void {
@@ -198,20 +472,24 @@ export class CallClient {
   }
 
   async startAsCaller(): Promise<RTCSessionDescriptionInit> {
+    this.role = "caller";
     const pc = this.ensurePeerConnection();
     await this.attachLocalMedia(pc, true);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    this.applyTier(0).catch(() => {});
     return offer;
   }
 
   async acceptAsCallee(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
+    this.role = "callee";
     const pc = this.ensurePeerConnection();
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     await this.attachLocalMedia(pc, false);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await this.drainPendingCandidates();
+    this.applyTier(0).catch(() => {});
     return answer;
   }
 
@@ -312,6 +590,12 @@ export class CallClient {
 
   dispose(): void {
     this.disposed = true;
+    if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+    if (this.giveUpTimer) clearTimeout(this.giveUpTimer);
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    if (this.qualityTimer) clearInterval(this.qualityTimer);
+    this.disconnectTimer = this.giveUpTimer = this.restartTimer = null;
+    this.qualityTimer = null;
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.pc?.close();
     this.pc = null;

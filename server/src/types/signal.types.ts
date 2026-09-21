@@ -102,6 +102,18 @@ export interface CallCameraPayload {
   toUserId: string;
   callId: string;
   on: boolean;
+  // True when the sender's app switched its video off on its own because the
+  // connection is too weak for it (as opposed to the person turning it off).
+  paused?: boolean;
+}
+
+// Mid-call renegotiation with an ICE restart, used to re-establish media after
+// a network drop or a Wi-Fi <-> mobile switch. Same shape as the initial
+// offer/answer, and just as opaque to the server.
+export interface CallRestartPayload {
+  toUserId: string;
+  callId: string;
+  sdp: unknown;
 }
 
 export interface CallReactionPayload {

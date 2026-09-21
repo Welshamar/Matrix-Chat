@@ -8,6 +8,7 @@ import {
   CallInvitePayload,
   CallMutePayload,
   CallReactionPayload,
+  CallRestartPayload,
   SocketAck,
 } from "../types/signal.types";
 
@@ -38,6 +39,11 @@ function isValidCameraPayload(p: unknown): p is CallCameraPayload {
 // A reaction is a single emoji glyph, never free text: this is relayed to the
 // other person's screen and rendered, so keep it tiny and bounded.
 const MAX_REACTION_LENGTH = 16;
+function isValidRestartPayload(p: unknown): p is CallRestartPayload {
+  const v = p as Partial<CallRestartPayload> | null;
+  return !!(v && isNonEmptyString(v.toUserId) && isNonEmptyString(v.callId) && v.sdp);
+}
+
 function isValidReactionPayload(p: unknown): p is CallReactionPayload {
   const v = p as Partial<CallReactionPayload> | null;
   return !!(
@@ -122,6 +128,7 @@ export function registerCallGateway(io: Server): void {
         fromUserId: userId,
         callId: payload.callId,
         on: payload.on,
+        paused: payload.paused === true,
       });
     });
 
@@ -132,6 +139,36 @@ export function registerCallGateway(io: Server): void {
         fromUserId: userId,
         callId: payload.callId,
         emoji: payload.emoji,
+      });
+    });
+
+    // ICE-restart renegotiation after a network change or drop. The original
+    // caller sends the restart offer; whichever side notices trouble first can
+    // ask the caller for one. All three are plain relays, like the initial
+    // offer/answer.
+    socket.on("call:restart", (payload: unknown) => {
+      if (!isValidRestartPayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:restart", {
+        fromUserId: userId,
+        callId: payload.callId,
+        sdp: payload.sdp,
+      });
+    });
+
+    socket.on("call:restart-answer", (payload: unknown) => {
+      if (!isValidRestartPayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:restart-answer", {
+        fromUserId: userId,
+        callId: payload.callId,
+        sdp: payload.sdp,
+      });
+    });
+
+    socket.on("call:restart-request", (payload: unknown) => {
+      if (!isValidEndPayload(payload)) return;
+      io.to(userRoom(payload.toUserId)).emit("call:restart-request", {
+        fromUserId: userId,
+        callId: payload.callId,
       });
     });
 

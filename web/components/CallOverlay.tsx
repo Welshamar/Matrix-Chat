@@ -39,6 +39,13 @@ interface CallOverlayProps {
   canSendVideo: boolean;
   facing: "user" | "environment";
   reactions: CallReaction[];
+  // The media path dropped and is being re-established.
+  reconnecting: boolean;
+  // The link is poor right now.
+  weakConnection: boolean;
+  // Video was paused automatically to protect the audio (mine / the other person's).
+  myVideoPaused: boolean;
+  peerVideoPaused: boolean;
   onToggleCamera: () => void;
   onSwitchCamera: () => void;
   onReact: (emoji: string) => void;
@@ -145,6 +152,10 @@ export function CallOverlay({
   canSendVideo,
   facing,
   reactions,
+  reconnecting,
+  weakConnection,
+  myVideoPaused,
+  peerVideoPaused,
   onToggleCamera,
   onSwitchCamera,
   onReact,
@@ -167,10 +178,11 @@ export function CallOverlay({
   const armHideTimer = useCallback(() => {
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hideTimerRef.current = null;
-    if (video && live && !trayOpen) {
+    // Never hide the controls while reconnecting: hanging up must stay one tap away.
+    if (video && live && !trayOpen && !reconnecting) {
       hideTimerRef.current = setTimeout(() => setUiVisible(false), CONTROLS_HIDE_MS);
     }
-  }, [video, live, trayOpen]);
+  }, [video, live, trayOpen, reconnecting]);
 
   useEffect(() => {
     setUiVisible(true);
@@ -218,6 +230,7 @@ export function CallOverlay({
   if (error) statusLine = error;
   else if (mediaPending && showPermissionHint) statusLine = video ? "Waiting for camera permission…" : "Waiting for microphone permission…";
   else if (incomingRinging) statusLine = video ? "Matrix Chat video call" : "Matrix Chat voice call";
+  else if (live && reconnecting) statusLine = "Reconnecting…";
   else if (live) statusLine = formatClock(duration);
   else if (connecting || status === "incoming") statusLine = "Connecting…";
   else statusLine = ringing ? "Ringing…" : "Calling…";
@@ -249,6 +262,20 @@ export function CallOverlay({
       </div>
     ) : null;
 
+  // Shown over the call while the connection is down or poor, so a freeze or a
+  // dropout is explained instead of just happening.
+  const netBanner =
+    live && !error && (reconnecting || weakConnection) ? (
+      <div className={`call-net-banner ${reconnecting ? "reconnecting" : ""}`} role="status" data-testid="call-net-banner">
+        <span className="call-net-dot" aria-hidden="true" />
+        {reconnecting
+          ? "Reconnecting… waiting for your connection"
+          : myVideoPaused
+            ? "Weak connection — video paused to keep the call clear"
+            : "Weak connection"}
+      </div>
+    ) : null;
+
   const bgTint = (
     <div className="call-bg" aria-hidden="true">
       {peerAvatarUrl && <div className="call-bg-photo" style={{ backgroundImage: `url(${peerAvatarUrl})` }} />}
@@ -271,10 +298,10 @@ export function CallOverlay({
     const showPeerVideo = answered && peerCameraOn && !!remoteStream;
     const selfFull = !answered;
     const mirror = facing === "user";
-    const chromeHidden = !uiVisible && live && !error;
+    const chromeHidden = !uiVisible && live && !error && !reconnecting;
 
     return (
-      <div className={`call-screen call-video ${chromeHidden ? "chrome-hidden" : ""}`} role="dialog" aria-label="Video call">
+      <div className={`call-screen call-video ${chromeHidden ? "chrome-hidden" : ""} ${reconnecting && live ? "is-reconnecting" : ""}`} role="dialog" aria-label="Video call">
         <div className="call-card">
           {bgTint}
 
@@ -286,7 +313,11 @@ export function CallOverlay({
                 <div className={`call-avatar-wrap ${waiting && !error ? "call-pulse" : ""}`}>
                   <Avatar name={peerUsername} avatarUrl={peerAvatarUrl} size={132} />
                 </div>
-                {live && <div className="call-camera-off-note">{peerUsername}&apos;s camera is off</div>}
+                {live && (
+                  <div className="call-camera-off-note">
+                    {peerVideoPaused ? `${peerUsername}'s video is paused (weak connection)` : `${peerUsername}'s camera is off`}
+                  </div>
+                )}
               </div>
             )}
 
@@ -325,6 +356,8 @@ export function CallOverlay({
             )}
           </div>
 
+          {netBanner}
+
           {peerMuted && live && (
             <div className="call-peer-muted-chip" aria-label={`${peerUsername} is muted`}>
               <MicIcon off size={16} />
@@ -342,6 +375,7 @@ export function CallOverlay({
                   <span>Camera off</span>
                 </div>
               )}
+              {myVideoPaused && cameraOn && <span className="call-self-paused">Video paused</span>}
               <span className="call-self-pip-label">You</span>
             </div>
           )}
@@ -434,6 +468,8 @@ export function CallOverlay({
           </div>
           <span className="call-topbar-btn" />
         </div>
+
+        {netBanner}
 
         <div className="call-main" onClick={() => trayOpen && setTrayOpen(false)}>
           <div className="call-name">{peerUsername}</div>

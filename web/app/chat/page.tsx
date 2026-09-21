@@ -74,6 +74,14 @@ import { CallOverlay, CallStatus } from "@/components/CallOverlay";
 import { CALL_REACTION_LIFETIME_MS, CallReaction } from "@/components/CallReactions";
 import { VoiceRecorderButton } from "@/components/VoiceRecorderButton";
 import { FileAttachButton } from "@/components/FileAttachButton";
+import {
+  AttachmentError,
+  INLINE_MAX_BYTES,
+  cacheFile,
+  deleteCachedFile,
+  setAttachmentAuth,
+  uploadAttachment,
+} from "@/lib/attachments";
 import { ImageViewer } from "@/components/ImageViewer";
 
 type ChatFilter = "all" | "unread" | "favourites" | "groups";
@@ -108,6 +116,10 @@ export default function ChatPage() {
   const [showMenu, setShowMenu] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // A heavy file being encrypted and uploaded (or that failed to): drives the
+  // progress strip above the composer.
+  const [fileTransfer, setFileTransfer] = useState<{ name: string; progress: number; error?: string } | null>(null);
+  const fileUploadAbortRef = useRef<AbortController | null>(null);
   const [viewOnceArmed, setViewOnceArmed] = useState(false);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [viewerMessage, setViewerMessage] = useState<LocalMessage | null>(null);
@@ -143,6 +155,14 @@ export default function ChatPage() {
   const [callCanSendVideo, setCallCanSendVideo] = useState(false);
   const [callFacing, setCallFacing] = useState<"user" | "environment">("user");
   const [callReactions, setCallReactions] = useState<CallReaction[]>([]);
+  // Connection health: the media path dropped and is being re-established, the
+  // link is weak, and whether video was paused (mine / theirs) to cope with it.
+  const [callReconnecting, setCallReconnecting] = useState(false);
+  const [callWeak, setCallWeak] = useState(false);
+  const [callMyVideoPaused, setCallMyVideoPaused] = useState(false);
+  const [callPeerVideoPaused, setCallPeerVideoPaused] = useState(false);
+
+  setAttachmentAuth(session ? { token: session.token, userId: session.userId } : null);
 
   const clientRef = useRef<SignalClient | null>(null);
   const socketRef = useRef<Socket | null>(null);
@@ -204,6 +224,20 @@ export default function ChatPage() {
   useEffect(() => {
     callDurationRef.current = callDuration;
   }, [callDuration]);
+  // When the device's network comes back or changes (Wi-Fi <-> mobile), re-check
+  // the call's media path straight away instead of waiting for it to time out.
+  useEffect(() => {
+    if (!callStatus) return;
+    const onNetworkChange = () => callClientRef.current?.notifyNetworkChange();
+    window.addEventListener("online", onNetworkChange);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const connection = (navigator as any).connection as EventTarget | undefined;
+    connection?.addEventListener?.("change", onNetworkChange);
+    return () => {
+      window.removeEventListener("online", onNetworkChange);
+      connection?.removeEventListener?.("change", onNetworkChange);
+    };
+  }, [callStatus]);
   useEffect(() => {
     callPeerRef.current = callPeer;
   }, [callPeer]);
@@ -525,21 +559,14 @@ export default function ChatPage() {
       });
       socket.on("disconnect", () => {
         setConnected(false);
-        // WebRTC's actual audio connection doesn't depend on this
-        // signaling socket once the call is negotiated — it's a direct
-        // (or TURN-relayed) peer-to-peer media session. A signaling drop
-        // (tab backgrounded, brief network blip — socket.io's own ping
-        // timeout is tight enough now that ordinary backgrounding can
-        // trigger this) doesn't mean the call itself is dead, so this
-        // waits for socket.io's automatic reconnect before giving up,
-        // instead of killing an otherwise-healthy call immediately.
-        if (callIdRef.current) {
-          if (callDisconnectTimeoutRef.current) clearTimeout(callDisconnectTimeoutRef.current);
-          callDisconnectTimeoutRef.current = setTimeout(() => {
-            callDisconnectTimeoutRef.current = null;
-            if (callIdRef.current) failCall("Disconnected.");
-          }, 8000);
-        }
+        // A live call's audio/video is a direct (or TURN-relayed) peer-to-peer
+        // session that doesn't depend on this signaling socket, so a socket drop
+        // -- routine on a phone -- must NOT end the call (it used to, after 8s,
+        // which is why calls kept dying on an unstable connection). If the media
+        // path is genuinely gone, the call client notices that itself, shows
+        // "Reconnecting" and only gives up if it can't recover (see CallClient).
+        // Anything the call needs to say meanwhile is queued by socket.io and
+        // sent as soon as it reconnects.
       });
 
       socket.on("signal:message", async (msg: InboundSignalMessage) => {
@@ -709,9 +736,24 @@ export default function ChatPage() {
         setCallPeerMuted(evt.muted);
       });
 
-      socket.on("call:peer-camera", (evt: { callId: string; on: boolean }) => {
+      socket.on("call:peer-camera", (evt: { callId: string; on: boolean; paused?: boolean }) => {
         if (callIdRef.current !== evt.callId) return;
         setCallPeerCameraOn(evt.on);
+        setCallPeerVideoPaused(evt.paused === true);
+      });
+
+      // ICE-restart renegotiation after a network drop (see CallClient).
+      socket.on("call:restart", (evt: { callId: string; sdp: RTCSessionDescriptionInit }) => {
+        if (callIdRef.current !== evt.callId) return;
+        callClientRef.current?.handleRestartOffer(evt.sdp);
+      });
+      socket.on("call:restart-answer", (evt: { callId: string; sdp: RTCSessionDescriptionInit }) => {
+        if (callIdRef.current !== evt.callId) return;
+        callClientRef.current?.applyRestartAnswer(evt.sdp);
+      });
+      socket.on("call:restart-request", (evt: { callId: string }) => {
+        if (callIdRef.current !== evt.callId) return;
+        callClientRef.current?.restartIce();
       });
 
       socket.on("call:reacted", (evt: { fromUserId: string; callId: string; emoji: string }) => {
@@ -993,7 +1035,11 @@ export default function ChatPage() {
     body: string,
     kind: "TEXT" | "VOICE" | "FILE",
     replyTo?: ReplyRef,
-    file?: FileMeta
+    file?: FileMeta,
+    // Runs once the message has an id but before it is stored/rendered -- used to
+    // put the sender's own copy of a heavy file in the local cache first, so the
+    // bubble doesn't go and download the file that was just uploaded.
+    beforeStore?: (messageId: string) => Promise<void>
   ) {
     if (!session || !clientRef.current || !socketRef.current) return;
     const wasViewOnce = viewOnceArmed && kind === "TEXT";
@@ -1014,8 +1060,10 @@ export default function ChatPage() {
         if (ack.ok && !localId) localId = ack.messageId ?? null;
       }
       const timestamp = new Date().toISOString();
+      const groupMessageId = localId ?? crypto.randomUUID();
+      await beforeStore?.(groupMessageId);
       await appendMessage(session.userId, groupThreadKey(activeGroup.groupId), {
-        id: localId ?? crypto.randomUUID(),
+        id: groupMessageId,
         direction: "out",
         body,
         timestamp,
@@ -1052,6 +1100,7 @@ export default function ChatPage() {
     }
 
     const timestamp = new Date().toISOString();
+    await beforeStore?.(ack.messageId);
     await appendMessage(session.userId, activePeer.peerId, {
       id: ack.messageId,
       direction: "out",
@@ -1158,6 +1207,8 @@ export default function ChatPage() {
       if (!threadKey) return;
 
       await deleteMessage(session.userId, threadKey, messageId);
+      // Also drop the local copy of a heavy file that belonged to it.
+      await deleteCachedFile(session.userId, messageId);
       const updated = await getMessages(session.userId, threadKey);
       setMessages(updated);
 
@@ -1208,15 +1259,55 @@ export default function ChatPage() {
     }
   }
 
-  async function handleFileSelected(dataUrl: string, meta: FileMeta) {
+  function readFileAsDataUrl(file: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read the selected file."));
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function handleFileSelected(file: File) {
     setSending(true);
+    setFileTransfer(null);
+    const meta: FileMeta = { name: file.name, mime: file.type || "application/octet-stream", size: file.size };
     try {
       const replyRef = replyingTo ? buildReplyRef(replyingTo) : undefined;
-      await sendToActiveThread(dataUrl, "FILE", replyRef, meta);
+
+      if (file.size <= INLINE_MAX_BYTES) {
+        // Small enough to travel inside the message itself.
+        await sendToActiveThread(await readFileAsDataUrl(file), "FILE", replyRef, meta);
+      } else {
+        // Heavy file: encrypt + upload in chunks over HTTP, then send only a
+        // small pointer (and the key) through the Signal-encrypted message.
+        const controller = new AbortController();
+        fileUploadAbortRef.current = controller;
+        setFileTransfer({ name: file.name, progress: 0 });
+        const att = await uploadAttachment(
+          file,
+          (progress) => setFileTransfer({ name: file.name, progress }),
+          controller.signal
+        );
+        await sendToActiveThread("", "FILE", replyRef, { ...meta, att }, async (messageId) => {
+          if (session) await cacheFile(session.userId, messageId, file);
+        });
+        setFileTransfer(null);
+      }
       setReplyingTo(null);
     } catch (err) {
       console.error(err);
+      if (err instanceof AttachmentError && err.code === "cancelled") {
+        setFileTransfer(null);
+      } else {
+        setFileTransfer({
+          name: file.name,
+          progress: 0,
+          error: err instanceof Error && err.message ? err.message : "Couldn't send the file. Please try again.",
+        });
+      }
     } finally {
+      fileUploadAbortRef.current = null;
       setSending(false);
     }
   }
@@ -1368,6 +1459,10 @@ export default function ChatPage() {
     setCallCanSendVideo(false);
     setCallFacing("user");
     setCallReactions([]);
+    setCallReconnecting(false);
+    setCallWeak(false);
+    setCallMyVideoPaused(false);
+    setCallPeerVideoPaused(false);
   }
 
   // Used for both "the other side hung up/declined/failed" and "something
@@ -1396,6 +1491,18 @@ export default function ChatPage() {
         onFailure: failCall,
         onConnected: handleCallConnected,
         onLocalStream: setCallLocalStream,
+        onConnectionChange: (state) => setCallReconnecting(state === "reconnecting"),
+        onQuality: ({ weak }) => setCallWeak(weak),
+        onVideoPaused: (paused) => {
+          setCallMyVideoPaused(paused);
+          // Tell the other side why my picture stopped (and when it's back) --
+          // but not if I'd turned the camera off myself.
+          const client = callClientRef.current;
+          const target = callPeerRef.current;
+          if (client?.isCameraOn && target && callIdRef.current && socketRef.current) {
+            socketRef.current.emit("call:camera", { toUserId: target.userId, callId: callIdRef.current, on: !paused, paused });
+          }
+        },
       },
       video
     );
@@ -1898,6 +2005,34 @@ export default function ChatPage() {
                 );
               })}
             </div>
+            {fileTransfer && (
+              <div className={`transfer-strip ${fileTransfer.error ? "transfer-strip-error" : ""}`} role="status">
+                <div className="transfer-strip-text">
+                  <span className="transfer-strip-name">{fileTransfer.name}</span>
+                  {fileTransfer.error ? (
+                    <span className="transfer-strip-detail">{fileTransfer.error}</span>
+                  ) : (
+                    <span className="transfer-strip-detail">Encrypting and uploading… {Math.round(fileTransfer.progress * 100)}%</span>
+                  )}
+                  {!fileTransfer.error && (
+                    <span className="transfer-strip-bar">
+                      <span className="transfer-strip-fill" style={{ width: `${Math.round(fileTransfer.progress * 100)}%` }} />
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="reply-preview-close"
+                  onClick={() => {
+                    fileUploadAbortRef.current?.abort();
+                    setFileTransfer(null);
+                  }}
+                  aria-label={fileTransfer.error ? "Dismiss" : "Cancel upload"}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
             {replyingTo && (
               <div className="reply-preview-bar">
                 <div className="reply-preview-accent" />
@@ -2048,6 +2183,10 @@ export default function ChatPage() {
           canSendVideo={callCanSendVideo}
           facing={callFacing}
           reactions={callReactions}
+          reconnecting={callReconnecting}
+          weakConnection={callWeak}
+          myVideoPaused={callMyVideoPaused}
+          peerVideoPaused={callPeerVideoPaused}
           onToggleCamera={toggleCallCamera}
           onSwitchCamera={switchCallCamera}
           onReact={sendCallReaction}
