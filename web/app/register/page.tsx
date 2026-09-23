@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { register } from "@/lib/api";
 import { saveSession } from "@/lib/auth";
+import { checkUsername, USERNAME_MAX_LENGTH, USERNAME_MIN_LENGTH } from "@/lib/username";
 import { VerifyCodeForm } from "@/components/VerifyCodeForm";
 
 export default function RegisterPage() {
@@ -19,6 +20,11 @@ export default function RegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    const usernameCheck = checkUsername(username);
+    if (!usernameCheck.ok) {
+      setError(usernameCheck.error ?? "Invalid username.");
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await register(username.trim(), email.trim(), password);
@@ -65,10 +71,12 @@ export default function RegisterPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
-                  minLength={3}
-                  maxLength={32}
-                  pattern="[a-zA-Z0-9_.\-]+"
-                  title="Letters, numbers, _ . - only"
+                  minLength={USERNAME_MIN_LENGTH}
+                  maxLength={USERNAME_MAX_LENGTH}
+                  // No character-set pattern here -- almost anything is allowed
+                  // (see lib/username.ts); the real check runs on submit so a
+                  // clear message can be shown instead of the browser's own
+                  // "match this pattern" tooltip.
                   required
                 />
               </div>

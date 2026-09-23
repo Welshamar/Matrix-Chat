@@ -6,7 +6,29 @@ import { env } from "../config/env";
 import { sendVerificationEmail } from "../lib/mailer";
 
 const BCRYPT_ROUNDS = 12;
-const USERNAME_PATTERN = /^[a-zA-Z0-9_.-]{3,32}$/;
+// Deliberately permissive: any script's letters, spaces, and punctuation are
+// fine here (a username is a display handle, not a URL/filename identifier --
+// every place it's used in a request path already goes through
+// encodeURIComponent client-side). Only emoji and control characters are
+// excluded -- emoji so it stays readable as plain text everywhere it's
+// rendered, control characters so it can't break layout or hide content.
+// Mirrored client-side in web/lib/username.ts for instant feedback; this is
+// the actual enforcement point.
+const USERNAME_MIN_LENGTH = 3;
+const USERNAME_MAX_LENGTH = 32;
+const EMOJI_PATTERN = /\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}/u;
+const CONTROL_CHAR_PATTERN = /\p{Cc}/u;
+
+function isValidUsername(raw: string): raw is string {
+  const trimmed = raw.trim();
+  return (
+    trimmed.length >= USERNAME_MIN_LENGTH &&
+    trimmed.length <= USERNAME_MAX_LENGTH &&
+    !CONTROL_CHAR_PATTERN.test(trimmed) &&
+    !EMOJI_PATTERN.test(trimmed)
+  );
+}
+
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000;
 const MAX_AVATAR_DATA_URL_LENGTH = 400_000; // ~300KB decoded — client resizes before upload
@@ -32,12 +54,16 @@ function authResponse(user: { id: string; username: string; avatarUrl: string | 
 }
 
 export async function register(req: Request, res: Response): Promise<void> {
-  const { username, email, password } = req.body as { username?: string; email?: string; password?: string };
+  const { email, password } = req.body as { username?: string; email?: string; password?: string };
+  const rawUsername = req.body?.username as string | undefined;
 
-  if (!username || !USERNAME_PATTERN.test(username)) {
-    res.status(400).json({ error: "Username must be 3-32 chars: letters, numbers, _ . -" });
+  if (!rawUsername || !isValidUsername(rawUsername)) {
+    res.status(400).json({ error: `Username must be ${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} characters, no emoji.` });
     return;
   }
+  // Trimmed, not the raw field -- so " bob " and "bob" collide on the unique
+  // constraint (as they should) instead of silently creating two accounts.
+  const username = rawUsername.trim();
   if (!email || !EMAIL_PATTERN.test(email)) {
     res.status(400).json({ error: "Enter a valid email address." });
     return;

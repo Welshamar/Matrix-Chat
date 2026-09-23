@@ -71,6 +71,14 @@ const QUALITY_INTERVAL_MS = 3000;
 // keeps a weak uplink from starving it (which is what makes a call "break up").
 const VIDEO_BPS = [550_000, 180_000] as const;
 const VIDEO_FPS = [24, 12] as const;
+// Browsers default a voice call's Opus encoder to a fairly low bitrate (tuned
+// for narrowband telephony, not this app's echo-cancelled/noise-suppressed
+// wideband mic capture), which is what makes calls sound thin or muffled
+// compared to the voice notes (96kbps -- see VoiceRecorderButton). This is
+// still small next to the video budget above, so it's always affordable, not
+// stepped down under a weak link the way video is -- audio is the one thing
+// that must never degrade first.
+const AUDIO_BPS = 64_000;
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
@@ -93,6 +101,7 @@ export class CallClient {
   // has been acquired -- e.g. while the call is still ringing -- still applies.
   private muted = false;
   private videoSender: RTCRtpSender | null = null;
+  private audioSender: RTCRtpSender | null = null;
   private facing: CameraFacing = "user";
   private cameraOn = false;
   private disposed = false;
@@ -466,9 +475,24 @@ export class CallClient {
     stream.getTracks().forEach((track) => {
       const sender = pc.addTrack(track, stream);
       if (track.kind === "video") this.videoSender = sender;
+      if (track.kind === "audio") this.audioSender = sender;
     });
     this.cameraOn = stream.getVideoTracks().length > 0;
+    this.applyAudioBitrate().catch(() => {});
     this.publishLocalStream();
+  }
+
+  private async applyAudioBitrate(): Promise<void> {
+    const sender = this.audioSender;
+    if (!sender) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      params.encodings[0].maxBitrate = AUDIO_BPS;
+      await sender.setParameters(params);
+    } catch {
+      // Not fatal -- the call still works at whatever the browser's default is.
+    }
   }
 
   async startAsCaller(): Promise<RTCSessionDescriptionInit> {
@@ -601,6 +625,7 @@ export class CallClient {
     this.pc = null;
     this.localStream = null;
     this.videoSender = null;
+    this.audioSender = null;
     this.cameraOn = false;
     this.pendingCandidates = [];
   }

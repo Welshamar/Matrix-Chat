@@ -155,4 +155,21 @@ export function updateGroupMemberRole(token: string, groupId: string, userId: st
   });
 }
 
+export interface PresenceInfo {
+  online: boolean;
+  lastSeenAt: string | null;
+}
+
+// Fills in state from before this client connected -- the live
+// "presence:update" socket event (see lib/socket.ts) only covers changes
+// from here on.
+export function fetchPresence(token: string, userId: string): Promise<PresenceInfo> {
+  return authedRequest(`/api/presence/${encodeURIComponent(userId)}`, token, { method: "GET" });
+}
+
+export function fetchPresenceBatch(token: string, userIds: string[]): Promise<Record<string, PresenceInfo>> {
+  if (userIds.length === 0) return Promise.resolve({});
+  return authedRequest("/api/presence/batch", token, { method: "POST", body: JSON.stringify({ userIds }) });
+}
+
 export { API_URL };

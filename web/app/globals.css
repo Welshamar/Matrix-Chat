@@ -228,6 +228,25 @@ input {
   font-weight: 700;
 }
 
+.avatar-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.avatar-online-dot {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  min-width: 9px;
+  min-height: 9px;
+  border-radius: 50%;
+  background: #25d366;
+  border: 2px solid var(--bg-panel, #111b21);
+  box-sizing: content-box;
+}
+
 /* --- Chat layout --- */
 
 .chat-shell {

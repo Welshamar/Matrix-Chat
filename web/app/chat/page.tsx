@@ -8,9 +8,12 @@ import {
   addGroupMember,
   createGroup as createGroupApi,
   fetchInbox,
+  fetchPresence,
+  fetchPresenceBatch,
   getGroup,
   listGroups,
   lookupUsername,
+  PresenceInfo,
   registerPushToken,
   removeGroupMember,
   resolveUserId,
@@ -24,6 +27,7 @@ import {
   connectSignalSocket,
   IncomingCallEvent,
   InboundSignalMessage,
+  PresenceUpdateEvent,
   sendReceipt,
   sendSignalMessage,
   sendTyping,
@@ -110,6 +114,7 @@ export default function ChatPage() {
   // Thread key (peerId for 1:1, groupId for a group) -> usernames currently
   // composing in that thread. A ThreadView's `key` uses this same scheme.
   const [typingByThread, setTypingByThread] = useState<Record<string, string[]>>({});
+  const [presenceByUserId, setPresenceByUserId] = useState<Record<string, PresenceInfo>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [searchError, setSearchError] = useState<string | null>(null);
   const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
@@ -454,6 +459,26 @@ export default function ChatPage() {
     refreshGroups(session.userId);
   }, [session, refreshConversations, refreshGroups]);
 
+  // Paints the sidebar's online dots: batch-fetches presence for whichever
+  // conversation peers this client doesn't already have a reading for (a new
+  // conversation from a search, or the very first load). Live changes from
+  // then on come from the "presence:update" socket handler instead.
+  useEffect(() => {
+    if (!session) return;
+    const unknown = [...new Set(conversations.map((c) => c.peerId))].filter((id) => !(id in presenceByUserId));
+    if (unknown.length === 0) return;
+    fetchPresenceBatch(session.token, unknown)
+      .then((result) => setPresenceByUserId((prev) => ({ ...result, ...prev })))
+      .catch(() => {
+        // No presence data for these yet -- the UI already treats "unknown"
+        // the same as "not shown", so there's nothing to recover from here.
+      });
+    // presenceByUserId deliberately excluded — this only ever needs to fetch
+    // for ids not already in it, and including it would re-fire this effect
+    // every time it's the very state being set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, conversations]);
+
   // Register this device for push once we know who's logged in — a no-op
   // outside the native Android shell (see registerForPushNotifications).
   // Also re-runs on every foreground resume, not just a cold start — the
@@ -699,6 +724,13 @@ export default function ChatPage() {
         }
       });
 
+      // Live presence changes from here on -- the initial state (for anyone
+      // who was already online/offline before this socket connected) comes
+      // from the batch/single presence fetches below instead.
+      socket.on("presence:update", (evt: PresenceUpdateEvent) => {
+        setPresenceByUserId((prev) => ({ ...prev, [evt.userId]: { online: evt.online, lastSeenAt: evt.lastSeenAt } }));
+      });
+
       socket.on("call:incoming", (evt: IncomingCallEvent) => {
         // No call-waiting for this first pass — a second inbound call while
         // one is already active/ringing is just declined as busy.
@@ -938,6 +970,12 @@ export default function ChatPage() {
     setReplyingTo(null);
     setShowContactDetails(false);
     setMessages(await getMessages(session.userId, conv.peerId));
+    // Fire-and-forget: refreshes this peer's presence right when their chat
+    // is opened, rather than waiting on whatever the sidebar batch fetch
+    // last happened to have (which could be stale, or never ran for them).
+    fetchPresence(session.token, conv.peerId)
+      .then((info) => setPresenceByUserId((prev) => ({ ...prev, [conv.peerId]: info })))
+      .catch(() => {});
     if (socketRef.current) {
       await markThreadRead(session.userId, conv.peerId, socketRef.current);
       await clearUnread(session.userId, conv.peerId);
@@ -1883,7 +1921,7 @@ export default function ChatPage() {
                 className={`conversation-item ${activeKey === t.key ? "active" : ""}`}
                 onClick={() => handleSelectThread(t)}
               >
-                <Avatar name={t.name} avatarUrl={t.avatarUrl} size={44} />
+                <Avatar name={t.name} avatarUrl={t.avatarUrl} size={44} online={!t.isGroup ? presenceByUserId[t.key]?.online : undefined} />
                 <span className="conversation-text">
                   <span className="peer">
                     {t.isGroup && "👥 "}
@@ -1929,6 +1967,7 @@ export default function ChatPage() {
                   name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
                   avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
                   size={38}
+                  online={!activeGroup && activePeer ? presenceByUserId[activePeer.peerId]?.online : undefined}
                 />
                 <span className="chat-header-text">
                   <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
@@ -1938,7 +1977,8 @@ export default function ChatPage() {
                       if (typingUsers?.length) {
                         return activeGroup ? `${typingUsers.join(", ")} typing...` : "typing...";
                       }
-                      return activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted";
+                      if (activeGroup) return `${activeGroup.members.length} members`;
+                      return peerStatusLine(activePeer ? presenceByUserId[activePeer.peerId] : undefined);
                     })()}
                   </span>
                 </span>
@@ -2111,7 +2151,11 @@ export default function ChatPage() {
             <ContactDetailsPanel
               name={activeGroup ? activeGroup.name : activePeer!.peerUsername}
               avatarUrl={activeGroup ? activeGroup.avatarUrl : activePeer!.peerAvatarUrl}
-              status={activeGroup ? `${activeGroup.members.length} members` : "🔒 End-to-end encrypted"}
+              status={
+                activeGroup
+                  ? `${activeGroup.members.length} members`
+                  : peerStatusLine(activePeer ? presenceByUserId[activePeer.peerId] : undefined)
+              }
               messages={messages}
               onManageGroup={
                 activeGroup
@@ -2206,6 +2250,37 @@ export default function ChatPage() {
       {showExitPrompt && <div className="exit-prompt-toast">Press back again to exit</div>}
     </div>
   );
+}
+
+// WhatsApp-style relative "last seen" phrasing: recent times read as a
+// duration, older ones fall back to a clock time (today) or a date.
+function formatLastSeen(iso: string): string {
+  const then = new Date(iso);
+  const diffMs = Date.now() - then.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return "last seen just now";
+  if (diffMin < 60) return `last seen ${diffMin} minute${diffMin === 1 ? "" : "s"} ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `last seen ${diffHr} hour${diffHr === 1 ? "" : "s"} ago`;
+
+  const clock = then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfThen = new Date(then.getFullYear(), then.getMonth(), then.getDate());
+  const dayDiff = Math.round((startOfToday.getTime() - startOfThen.getTime()) / 86_400_000);
+  if (dayDiff === 1) return `last seen yesterday at ${clock}`;
+  if (dayDiff < 7) return `last seen ${then.toLocaleDateString([], { weekday: "long" })} at ${clock}`;
+  return `last seen ${then.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "numeric" })}`;
+}
+
+// The header subtitle / contact-details status line for a 1:1 chat: typing
+// (handled by the caller, which knows the thread key) takes priority over
+// this, which is "online" > "last seen ..." > the encryption note once
+// nothing about presence is known yet.
+function peerStatusLine(presence: PresenceInfo | undefined): string {
+  if (presence?.online) return "online";
+  if (presence?.lastSeenAt) return formatLastSeen(presence.lastSeenAt);
+  return "🔒 End-to-end encrypted";
 }
 
 function summarize(

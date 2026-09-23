@@ -31,6 +31,10 @@ model User {
   // time; a second device's registration just overwrites this.
   fcmToken       String?
   createdAt      DateTime @default(now())
+  // Set when the user's last active socket disconnects (see
+  // signal.gateway.ts); null until their first-ever disconnect, which the
+  // client reads as "no last-seen on record" rather than a real timestamp.
+  lastSeenAt     DateTime?
 
   identityKey    IdentityKey?
   signedPreKey   SignedPreKey?

@@ -25,6 +25,12 @@ export interface SignalViewedEvent {
   from: string;
 }
 
+export interface PresenceUpdateEvent {
+  userId: string;
+  online: boolean;
+  lastSeenAt: string | null;
+}
+
 export interface SignalTypingEvent {
   from: string;
   username: string;

@@ -95,8 +95,15 @@ export function registerSignalGateway(io: Server): void {
       });
 
     const sockets = onlineSockets.get(userId) ?? new Set<string>();
+    const wasOffline = sockets.size === 0;
     sockets.add(socket.id);
     onlineSockets.set(userId, sockets);
+    // First socket for this user (not just a second tab/device reconnecting)
+    // -- they were offline a moment ago, so tell everyone they're online now.
+    // No contact-list concept exists to scope this to just their chat
+    // partners, so it's a plain broadcast; harmless at this app's scale (see
+    // README "Production hardening notes").
+    if (wasOffline) io.emit("presence:update", { userId, online: true, lastSeenAt: null });
 
     socket.on(
       "signal:message",
@@ -282,7 +289,17 @@ export function registerSignalGateway(io: Server): void {
       socketVisibility.delete(socket.id);
       const set = onlineSockets.get(userId);
       set?.delete(socket.id);
-      if (set && set.size === 0) onlineSockets.delete(userId);
+      if (set && set.size === 0) {
+        onlineSockets.delete(userId);
+        // Their last socket just dropped -- record when, and tell everyone
+        // they've gone offline. Fire-and-forget: a lost write here just
+        // means their "last seen" is stale by one session, never worse.
+        const lastSeenAt = new Date();
+        prisma.user
+          .update({ where: { id: userId }, data: { lastSeenAt } })
+          .catch((err) => console.error("Failed to record lastSeenAt:", err));
+        io.emit("presence:update", { userId, online: false, lastSeenAt: lastSeenAt.toISOString() });
+      }
     });
   });
 }
