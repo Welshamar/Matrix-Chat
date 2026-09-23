@@ -1,0 +1,27 @@
+{
+  "name": "matrix-chat-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Puppeteer regression suite for Matrix Chat — drives two real browser profiles against a running server+web dev stack.",
+  "scripts": {
+    "qa:create": "node qa-users.js create",
+    "qa:delete": "node qa-users.js delete",
+    "test:app": "node app-test.js",
+    "test:calls": "node call-test.js",
+    "test:call-ui": "node call-ui-test.js",
+    "test:video": "node video-test.js",
+    "test:camera-permission": "node camera-permission-test.js",
+    "test:resilience": "node resilience-test.js",
+    "test:files": "node files-test.js",
+    "test:files-download": "node files-download-test.js",
+    "test:player": "node player-test.js",
+    "test:receipts": "node receipt-test.js",
+    "test:fidelity": "node fidelity-test.js",
+    "test:presence": "node presence-username-test.js",
+    "test:all": "npm run test:app && npm run test:calls && npm run test:call-ui && npm run test:video && npm run test:camera-permission && npm run test:resilience && npm run test:files && npm run test:files-download && npm run test:player && npm run test:receipts && npm run test:fidelity && npm run test:presence"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.11.0",
+    "sharp": "^0.35.4"
+  }
+}
