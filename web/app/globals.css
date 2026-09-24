@@ -2888,6 +2888,68 @@ input {
   }
 }
 
+/* --- Legal pages (privacy policy, terms) --- */
+.legal-shell {
+  min-height: 100vh;
+  background: var(--bg-app, var(--bg-panel));
+  padding: 40px 20px 80px;
+}
+
+.legal-doc {
+  max-width: 680px;
+  margin: 0 auto;
+  color: var(--text);
+  line-height: 1.65;
+}
+
+.legal-back {
+  display: inline-block;
+  margin-bottom: 24px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.legal-doc h1 {
+  font-size: 28px;
+  margin: 0 0 4px;
+}
+
+.legal-effective {
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 0 0 28px;
+}
+
+.legal-doc h2 {
+  font-size: 18px;
+  margin: 32px 0 10px;
+}
+
+.legal-doc p {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+}
+
+.legal-doc ul {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  color: var(--text-dim);
+}
+
+.legal-doc li {
+  margin-bottom: 8px;
+}
+
+.legal-doc strong {
+  color: var(--text);
+}
+
+.legal-doc a {
+  color: var(--accent);
+}
+
 .exit-prompt-toast {
   position: fixed;
   bottom: 24px;
