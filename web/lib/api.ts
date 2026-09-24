@@ -75,6 +75,17 @@ export function resendCode(username: string): Promise<{ message: string }> {
   return publicRequest("/api/auth/resend-code", { method: "POST", body: JSON.stringify({ username }) });
 }
 
+export function forgotPassword(username: string, email: string): Promise<{ username: string; message: string }> {
+  return publicRequest("/api/auth/forgot-password", { method: "POST", body: JSON.stringify({ username, email }) });
+}
+
+export function resetPassword(username: string, code: string, newPassword: string): Promise<AuthResponse> {
+  return publicRequest("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ username, code, newPassword }),
+  });
+}
+
 export function lookupUsername(token: string, username: string): Promise<UserProfile> {
   return authedRequest(`/api/auth/lookup/${encodeURIComponent(username)}`, token, { method: "GET" });
 }

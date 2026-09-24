@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { prisma } from "../db/prisma";
 import { env } from "../config/env";
-import { sendVerificationEmail } from "../lib/mailer";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/mailer";
 
 const BCRYPT_ROUNDS = 12;
 // Deliberately permissive: any script's letters, spaces, and punctuation are
@@ -227,6 +227,81 @@ export async function login(req: Request, res: Response): Promise<void> {
   }
 
   res.json(authResponse(user));
+}
+
+/** POST /api/auth/forgot-password — requires both the username and the
+ *  account's email to match (not just one), and issues a single generic
+ *  error either way rather than saying which one was wrong -- otherwise
+ *  this endpoint would let someone probe a username and an email
+ *  separately to find a valid pair. */
+export async function forgotPassword(req: Request, res: Response): Promise<void> {
+  const { username, email } = req.body as { username?: string; email?: string };
+
+  if (!username || !email) {
+    res.status(400).json({ error: "username and email are required." });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { username } });
+  if (!user || !user.email || user.email !== email) {
+    res.status(404).json({ error: "No account matches that username and email." });
+    return;
+  }
+
+  const code = generateVerificationCode();
+  try {
+    await sendPasswordResetEmail(user.email, code);
+  } catch (err) {
+    console.error("Failed to send password reset email:", err);
+    res.status(503).json({ error: "Couldn't send the reset email. Please try again." });
+    return;
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordResetCode: code, passwordResetCodeExpiresAt: new Date(Date.now() + VERIFICATION_CODE_TTL_MS) },
+  });
+
+  res.json({ username: user.username, message: "Reset code sent — check your email." });
+}
+
+/** POST /api/auth/reset-password — completes the flow above: checks the
+ *  6-digit code and, on success, sets the new password and logs the
+ *  person straight in (same "verify, then land in the app" shape as
+ *  verifyEmail above). */
+export async function resetPassword(req: Request, res: Response): Promise<void> {
+  const { username, code, newPassword } = req.body as { username?: string; code?: string; newPassword?: string };
+
+  if (!username || !code || !newPassword) {
+    res.status(400).json({ error: "username, code and newPassword are required." });
+    return;
+  }
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters." });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { username } });
+  if (!user) {
+    res.status(404).json({ error: "No account with that username." });
+    return;
+  }
+  if (!user.passwordResetCode || user.passwordResetCode !== code) {
+    res.status(400).json({ error: "Incorrect code." });
+    return;
+  }
+  if (!user.passwordResetCodeExpiresAt || user.passwordResetCodeExpiresAt < new Date()) {
+    res.status(400).json({ error: "That code has expired. Request a new one." });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash, passwordResetCode: null, passwordResetCodeExpiresAt: null },
+  });
+
+  res.json(authResponse(updated));
 }
 
 /** GET /api/auth/lookup/:username — resolve a username to a userId to start a chat. */

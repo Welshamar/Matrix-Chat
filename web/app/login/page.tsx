@@ -80,6 +80,9 @@ export default function LoginPage() {
                   required
                 />
               </div>
+              <p className="auth-forgot-link">
+                <Link href="/forgot-password">Forgot password?</Link>
+              </p>
               <button className="btn-primary" type="submit" disabled={submitting}>
                 {submitting ? "Signing in..." : "Sign in"}
               </button>

@@ -9,16 +9,22 @@ import { env } from "../config/env";
 // clicking a verification link SendGrid emails to the sender address) can
 // be used, without waiting on the other.
 
-function renderEmail(code: string) {
+interface EmailContent {
+  subject: string;
+  text: string;
+  html: string;
+}
+
+function codeEmail(subject: string, intro: string, code: string): EmailContent {
   return {
-    subject: "Your Matrix Chat verification code",
-    text: `Your verification code is ${code}. It expires in 10 minutes.`,
+    subject,
+    text: `${intro} ${code}. It expires in 10 minutes.`,
     html: `
       <div style="font-family: Georgia, serif; max-width: 420px; margin: 0 auto;">
         <h2 style="margin-bottom: 4px;">🔒 Matrix Chat</h2>
-        <p>Your verification code is:</p>
+        <p>${intro}</p>
         <p style="font-size: 32px; font-weight: bold; letter-spacing: 6px;">${code}</p>
-        <p style="color: #666;">This code expires in 10 minutes. If you didn't request this, you can ignore this email.</p>
+        <p style="color: #666;">This code expires in 10 minutes. If you didn't request this, you can ignore this email -- your account is unaffected.</p>
       </div>
     `,
   };
@@ -29,37 +35,38 @@ function renderEmail(code: string) {
 // email account it can mail any address from day one -- no domain to verify.
 // Trade-off: Gmail's own sending caps (~500/day) apply, irrelevant at this
 // app's scale. Raw SMTP is blocked outbound by some free PaaS tiers to stop
-// spam relay abuse -- unconfirmed for Render as of writing; if it turns out
-// blocked there, SendGrid (a plain HTTPS call) works around that too.
+// spam relay abuse (confirmed blocked on Render's free tier) -- SendGrid (a
+// plain HTTPS call) works around that.
 let gmailTransporter: Transporter | null = null;
 
-async function sendViaGmail(to: string, code: string): Promise<void> {
+async function sendViaGmail(to: string, content: EmailContent): Promise<void> {
   if (!gmailTransporter) {
     gmailTransporter = nodemailer.createTransport({
       service: "gmail",
       auth: { user: env.GMAIL_USER, pass: env.GMAIL_APP_PASSWORD },
     });
   }
-  const { subject, text, html } = renderEmail(code);
-  await gmailTransporter.sendMail({ from: `Matrix Chat <${env.GMAIL_USER}>`, to, subject, text, html });
+  await gmailTransporter.sendMail({ from: `Matrix Chat <${env.GMAIL_USER}>`, to, ...content });
 }
 
 // --- SendGrid (plain HTTPS call, no SDK dependency needed) ---
 // Only needs the `from` address to pass Single Sender Verification (click
 // the link SendGrid emails to it) -- no domain, no DNS records, no 2FA
-// prerequisite. https://app.sendgrid.com/settings/sender_auth
-async function sendViaSendGrid(to: string, code: string): Promise<void> {
-  const { subject, text, html } = renderEmail(code);
+// prerequisite. https://app.sendgrid.com/settings/sender_auth. Without full
+// Domain Authentication, mail sent "from" a gmail.com address through a
+// third party (rather than Google's own servers) commonly lands in spam --
+// expected until SENDGRID_FROM_EMAIL is on a domain SendGrid has verified.
+async function sendViaSendGrid(to: string, content: EmailContent): Promise<void> {
   const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.SENDGRID_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
       from: { email: env.SENDGRID_FROM_EMAIL, name: "Matrix Chat" },
-      subject,
+      subject: content.subject,
       content: [
-        { type: "text/plain", value: text },
-        { type: "text/html", value: html },
+        { type: "text/plain", value: content.text },
+        { type: "text/html", value: content.html },
       ],
     }),
   });
@@ -72,12 +79,12 @@ async function sendViaSendGrid(to: string, code: string): Promise<void> {
   }
 }
 
-export async function sendVerificationEmail(to: string, code: string): Promise<void> {
+async function sendEmail(to: string, content: EmailContent): Promise<void> {
   try {
     if (env.GMAIL_USER && env.GMAIL_APP_PASSWORD) {
-      await sendViaGmail(to, code);
+      await sendViaGmail(to, content);
     } else if (env.SENDGRID_API_KEY && env.SENDGRID_FROM_EMAIL) {
-      await sendViaSendGrid(to, code);
+      await sendViaSendGrid(to, content);
     } else {
       throw new Error(
         "Email is not configured on this server (set GMAIL_USER + GMAIL_APP_PASSWORD, or SENDGRID_API_KEY + SENDGRID_FROM_EMAIL)."
@@ -94,4 +101,12 @@ export async function sendVerificationEmail(to: string, code: string): Promise<v
     const detail = err instanceof Error ? [err.message, (err as { response?: string }).response].filter(Boolean).join(" — ") : String(err);
     throw new Error(detail || "Failed to send email.");
   }
+}
+
+export function sendVerificationEmail(to: string, code: string): Promise<void> {
+  return sendEmail(to, codeEmail("Your Matrix Chat verification code", "Your verification code is", code));
+}
+
+export function sendPasswordResetEmail(to: string, code: string): Promise<void> {
+  return sendEmail(to, codeEmail("Your Matrix Chat password reset code", "Your password reset code is", code));
 }

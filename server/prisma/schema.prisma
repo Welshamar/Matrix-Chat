@@ -21,6 +21,12 @@ model User {
   // history of past codes is kept, matching the code's 10-minute lifetime.
   verificationCode          String?
   verificationCodeExpiresAt DateTime?
+  // Separate from the pair above rather than reused -- an "email verify"
+  // code and a "reset my password" code are different capabilities, and
+  // keeping them apart means one flow can never accidentally satisfy the
+  // other's check. Same single-active-code, 10-minute-lifetime shape.
+  passwordResetCode          String?
+  passwordResetCodeExpiresAt DateTime?
   passwordHash   String
   registrationId Int?
   avatarUrl      String? // small base64 data: URL, client-resized — no object storage configured
