@@ -366,6 +366,36 @@ export async function updateProfile(req: Request, res: Response): Promise<void> 
   res.json({ userId: user.id, username: user.username, avatarUrl: user.avatarUrl, statusText: user.statusText });
 }
 
+/** DELETE /api/auth/account — permanently deletes the calling account and
+ *  everything tied to it (messages, keys, group memberships, attachments --
+ *  all cascade off the User row; see prisma/schema.prisma) after confirming
+ *  the current password, so a leaked/stolen token alone isn't enough to
+ *  destroy the account. Irreversible; there is no undo. */
+export async function deleteAccount(req: Request, res: Response): Promise<void> {
+  const userId = req.userId!;
+  const { password } = req.body as { password?: string };
+
+  if (!password) {
+    res.status(400).json({ error: "password is required." });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) {
+    res.status(404).json({ error: "Account not found." });
+    return;
+  }
+
+  const valid = await bcrypt.compare(password, user.passwordHash);
+  if (!valid) {
+    res.status(401).json({ error: "Incorrect password." });
+    return;
+  }
+
+  await prisma.user.delete({ where: { id: userId } });
+  res.json({ ok: true });
+}
+
 /** POST /api/auth/push-token — registers this device's FCM token so
  *  signal.gateway.ts can push a notification when this user has no live
  *  socket connection. One device at a time; re-registering overwrites it. */

@@ -86,6 +86,11 @@ export function resetPassword(username: string, code: string, newPassword: strin
   });
 }
 
+// Permanent, no undo -- see deleteAccount in auth.controller.ts.
+export function deleteAccount(token: string, password: string): Promise<{ ok: true }> {
+  return authedRequest("/api/auth/account", token, { method: "DELETE", body: JSON.stringify({ password }) });
+}
+
 export function lookupUsername(token: string, username: string): Promise<UserProfile> {
   return authedRequest(`/api/auth/lookup/${encodeURIComponent(username)}`, token, { method: "GET" });
 }

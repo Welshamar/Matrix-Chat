@@ -1331,6 +1331,45 @@ input {
   margin-top: 8px;
 }
 
+.danger-zone {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.danger-zone-trigger {
+  background: none;
+  border: none;
+  color: #e5384f;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0;
+}
+
+.danger-zone-trigger:hover {
+  text-decoration: underline;
+}
+
+.danger-zone-warning {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 12px;
+}
+
+.btn-danger {
+  background: #e5384f;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+}
+
 .profile-avatar-row {
   display: flex;
   justify-content: center;

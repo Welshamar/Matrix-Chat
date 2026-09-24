@@ -12,6 +12,12 @@ next-env.d.ts
 # `npx cap sync android` + Gradle) — only the hand-authored project files
 # under web/android are worth tracking.
 web/android/local.properties
+# The app's real signing identity for store releases -- losing this means
+# losing the ability to ever publish an update to an already-published app
+# (a new keystore produces a different signature, which stores treat as a
+# different app). Never committed; back it up yourself, outside git.
+web/android/app/release.keystore
+web/android/keystore.properties
 web/android/.gradle/
 web/android/**/build/
 web/android/.idea/

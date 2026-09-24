@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// The store-release signing identity. Lives outside git entirely (see
+// .gitignore) -- back up both release.keystore and keystore.properties
+// somewhere safe, since losing either means losing the ability to publish
+// any future update to an already-published app (a re-generated keystore
+// produces a different signature, which every store treats as a different,
+// unrelated app). A missing file here just means a release build isn't
+// possible locally yet -- debug builds are unaffected.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+def hasReleaseSigning = keystorePropertiesFile.exists()
+if (hasReleaseSigning) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.matrixchat.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -16,10 +30,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file("${rootProject.projectDir}/app/${keystoreProperties['storeFile']}")
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

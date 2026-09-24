@@ -7,6 +7,7 @@ import { clearSession, loadSession, Session } from "@/lib/auth";
 import {
   addGroupMember,
   createGroup as createGroupApi,
+  deleteAccount as deleteAccountApi,
   fetchInbox,
   fetchPresence,
   fetchPresenceBatch,
@@ -1797,6 +1798,15 @@ export default function ChatPage() {
     router.replace("/login");
   }
 
+  async function handleDeleteAccount(password: string) {
+    if (!session) return;
+    await deleteAccountApi(session.token, password);
+    callClientRef.current?.dispose();
+    socketRef.current?.disconnect();
+    clearSession();
+    router.replace("/login");
+  }
+
   function handleSelectEmoji(emoji: string) {
     setDraft((d) => d + emoji);
     setShowEmojiPicker(false);
@@ -2178,6 +2188,7 @@ export default function ChatPage() {
           avatarUrl={session.avatarUrl}
           statusText={session.statusText}
           onSave={handleSaveProfile}
+          onDeleteAccount={handleDeleteAccount}
           onClose={() => setShowProfileModal(false)}
         />
       )}

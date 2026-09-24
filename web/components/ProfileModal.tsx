@@ -38,15 +38,37 @@ interface ProfileModalProps {
   avatarUrl: string | null;
   statusText: string | null;
   onSave: (patch: { avatarUrl?: string | null; statusText?: string | null }) => Promise<void>;
+  // Permanent, no undo. Rejects (keeping the confirm step open) on a wrong
+  // password; resolves once the account and everything tied to it is gone.
+  onDeleteAccount: (password: string) => Promise<void>;
   onClose: () => void;
 }
 
-export function ProfileModal({ username, avatarUrl, statusText, onSave, onClose }: ProfileModalProps) {
+export function ProfileModal({ username, avatarUrl, statusText, onSave, onDeleteAccount, onClose }: ProfileModalProps) {
   const [preview, setPreview] = useState<string | null>(avatarUrl);
   const [status, setStatus] = useState(statusText ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function handleDelete() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDeleteAccount(deletePassword);
+      // No further UI update needed on success -- the caller navigates
+      // away (to /login) as soon as this resolves.
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete account.");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -129,6 +151,49 @@ export function ProfileModal({ username, avatarUrl, statusText, onSave, onClose 
           <button className="btn-primary" type="button" onClick={handleSave} disabled={saving}>
             {saving ? "Saving..." : "Save"}
           </button>
+        </div>
+
+        <div className="danger-zone">
+          {!confirmingDelete ? (
+            <button type="button" className="danger-zone-trigger" onClick={() => setConfirmingDelete(true)}>
+              Delete account
+            </button>
+          ) : (
+            <>
+              <p className="danger-zone-warning">
+                This permanently deletes your account, messages, and files. There is no undo. Enter your password to
+                confirm.
+              </p>
+              {deleteError && <div className="error-banner">{deleteError}</div>}
+              <div className="field">
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="Current password"
+                  autoComplete="current-password"
+                  disabled={deleting}
+                />
+              </div>
+              <div className="modal-actions">
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => {
+                    setConfirmingDelete(false);
+                    setDeletePassword("");
+                    setDeleteError(null);
+                  }}
+                  disabled={deleting}
+                >
+                  Cancel
+                </button>
+                <button className="btn-danger" type="button" onClick={handleDelete} disabled={deleting || !deletePassword}>
+                  {deleting ? "Deleting..." : "Permanently delete"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>
