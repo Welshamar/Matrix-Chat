@@ -954,7 +954,7 @@ input {
    text-contrast overrides meant for the solid lime sent-bubble. */
 .bubble.out.emoji-only .meta,
 .bubble.out.emoji-only .tick {
-  color: var(--text-dim);
+  color: var(--text);
 }
 
 .bubble.out.emoji-only .tick-read {
@@ -975,13 +975,19 @@ input {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 }
 
 .bubble.emoji-only .meta {
-  background: var(--bg-panel-elevated);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--text);
   border-radius: 10px;
   padding: 2px 8px;
   margin-top: 2px;
+}
+
+.bubble.emoji-only .tick {
+  color: var(--text);
 }
 
 .bubble .meta {

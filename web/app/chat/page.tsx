@@ -535,9 +535,22 @@ export default function ChatPage() {
   // isUserVisible in signal.gateway.ts. document.visibilityState covers
   // both a backgrounded Android app and an unfocused browser tab.
   useEffect(() => {
+    // A backgrounded tab or paused Android app gets its timers throttled by
+    // the OS/browser, including socket.io-client's own reconnect backoff --
+    // so a socket that silently dropped while hidden can sit disconnected
+    // for well past its nominal 1-5s retry delay even after you come back.
+    // Forcing an immediate connect() on the way back to the foreground (a
+    // no-op if it's already connected) is what actually fixes the "messages
+    // trickle in slowly for a few seconds after reopening the app" delay.
+    function reconnectIfNeeded() {
+      const socket = socketRef.current;
+      if (socket && !socket.connected) socket.connect();
+    }
+
     function reportVisibility() {
       const socket = socketRef.current;
       if (socket) sendVisibility(socket, document.visibilityState === "visible");
+      if (document.visibilityState === "visible") reconnectIfNeeded();
     }
 
     document.addEventListener("visibilitychange", reportVisibility);
@@ -545,6 +558,7 @@ export default function ChatPage() {
       ? CapacitorApp.addListener("appStateChange", ({ isActive }) => {
           const socket = socketRef.current;
           if (socket) sendVisibility(socket, isActive);
+          if (isActive) reconnectIfNeeded();
         })
       : null;
 
