@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Server, Socket } from "socket.io";
 import { prisma } from "../db/prisma";
 import { verifySocketToken } from "../middleware/auth.middleware";
@@ -127,6 +128,20 @@ export function registerSignalGateway(io: Server): void {
             if (membership) groupId = payload.groupId;
           }
 
+          // A block only applies to direct 1:1 messages (WhatsApp still
+          // delivers group messages between blocked members) — pretend the
+          // send worked but never store or relay it, so the blocked sender
+          // sees an ordinary "sent" state and can't detect the block.
+          if (!groupId) {
+            const blocked = await prisma.block.findUnique({
+              where: { blockerId_blockedId: { blockerId: payload.recipientId, blockedId: userId } },
+            });
+            if (blocked) {
+              ack?.({ ok: true, messageId: randomUUID(), clientMessageId: payload.clientMessageId });
+              return;
+            }
+          }
+
           // `payload.ciphertext` is an opaque Double Ratchet blob: stored
           // and relayed byte-for-byte, never parsed or decrypted here.
           const message = await prisma.message.create({
@@ -160,10 +175,15 @@ export function registerSignalGateway(io: Server): void {
           // blocks the ack, and the notification body stays generic since
           // the server has no plaintext to put in it either way.
           if (!isUserVisible(payload.recipientId)) {
-            prisma.user
-              .findUnique({ where: { id: payload.recipientId }, select: { fcmToken: true } })
-              .then((recipient) => {
-                if (recipient?.fcmToken) {
+            const threadKey = groupId ? `group:${groupId}` : userId;
+            Promise.all([
+              prisma.user.findUnique({ where: { id: payload.recipientId }, select: { fcmToken: true } }),
+              prisma.mutedThread.findUnique({
+                where: { userId_threadKey: { userId: payload.recipientId, threadKey } },
+              }),
+            ])
+              .then(([recipient, muted]) => {
+                if (recipient?.fcmToken && !muted) {
                   const senderUsername = (socket.data.username as string) ?? "Someone";
                   return sendPushNotification(recipient.fcmToken, senderUsername, "Sent you a message", {
                     senderId: userId,

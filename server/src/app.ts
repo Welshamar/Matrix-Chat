@@ -7,6 +7,7 @@ import messagesRouter from "./routes/messages.routes";
 import groupsRouter from "./routes/groups.routes";
 import attachmentsRouter from "./routes/attachments.routes";
 import presenceRouter from "./routes/presence.routes";
+import socialRouter from "./routes/social.routes";
 
 export function createApp(): Express {
   const app = express();
@@ -22,6 +23,7 @@ export function createApp(): Express {
   app.use("/api/groups", groupsRouter);
   app.use("/api/attachments", attachmentsRouter);
   app.use("/api/presence", presenceRouter);
+  app.use("/api/social", socialRouter);
 
   // Catches anything asyncHandler forwards (e.g. Prisma losing the DB
   // connection) so a transient failure returns a normal error response

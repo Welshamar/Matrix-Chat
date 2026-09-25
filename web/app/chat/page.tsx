@@ -6,18 +6,25 @@ import type { Socket } from "socket.io-client";
 import { clearSession, loadSession, Session } from "@/lib/auth";
 import {
   addGroupMember,
+  blockUser as blockUserApi,
   createGroup as createGroupApi,
   deleteAccount as deleteAccountApi,
+  fetchBlockedUserIds,
   fetchInbox,
+  fetchMutedThreadKeys,
   fetchPresence,
   fetchPresenceBatch,
   getGroup,
   listGroups,
   lookupUsername,
+  muteThread as muteThreadApi,
   PresenceInfo,
   registerPushToken,
   removeGroupMember,
+  reportUser as reportUserApi,
   resolveUserId,
+  unblockUser as unblockUserApi,
+  unmuteThread as unmuteThreadApi,
   updateGroupMemberRole,
   updateProfile,
 } from "@/lib/api";
@@ -48,6 +55,8 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { registerForPushNotifications } from "@/lib/pushNotifications";
 import {
   appendMessage,
+  clearConversationMessages,
+  clearGroupMessages,
   clearGroupUnread,
   clearUnread,
   Conversation,
@@ -63,6 +72,8 @@ import {
   LocalGroup,
   LocalMessage,
   markViewOnceOpened,
+  setConversationMuted,
+  setGroupMuted,
   toggleFavourite,
   toggleGroupFavourite,
   updateMessageStatus,
@@ -76,6 +87,7 @@ import { EmojiPicker } from "@/components/EmojiPicker";
 import { ProfileModal } from "@/components/ProfileModal";
 import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
+import { ReportUserModal } from "@/components/ReportUserModal";
 import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
 import { CallOverlay, CallStatus } from "@/components/CallOverlay";
 import { CALL_REACTION_LIFETIME_MS, CallReaction } from "@/components/CallReactions";
@@ -102,6 +114,7 @@ interface ThreadView {
   lastTimestamp: string;
   favourite?: boolean;
   unreadCount?: number;
+  muted?: boolean;
 }
 
 export default function ChatPage() {
@@ -140,6 +153,14 @@ export default function ChatPage() {
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
   const [showContactDetails, setShowContactDetails] = useState(false);
   const [replyingTo, setReplyingTo] = useState<LocalMessage | null>(null);
+  const [showChatMenu, setShowChatMenu] = useState(false);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [chatSearchIndex, setChatSearchIndex] = useState(0);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
+  const [showReportModal, setShowReportModal] = useState(false);
   const [callStatus, setCallStatus] = useState<CallStatus | null>(null);
   const [callPeer, setCallPeer] = useState<{ userId: string; username: string; avatarUrl?: string | null } | null>(
     null
@@ -621,7 +642,10 @@ export default function ChatPage() {
             signalMessageType: msg.signalMessageType,
           });
           const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
-          playReceivedTone();
+          const isMuted = msg.groupId
+            ? groupsRef.current.find((g) => g.groupId === msg.groupId)?.muted
+            : conversationsRef.current.find((c) => c.peerId === msg.senderId)?.muted;
+          if (!isMuted) playReceivedTone();
 
           if (msg.groupId) {
             const group = await ensureGroup(
@@ -923,6 +947,34 @@ export default function ChatPage() {
 
       await refreshConversations(session.userId);
       await refreshGroups(session.userId);
+
+      try {
+        const { blockedUserIds: blocked } = await fetchBlockedUserIds(session.token);
+        setBlockedUserIds(new Set(blocked));
+      } catch (err) {
+        console.error("Failed to load blocked users:", err);
+      }
+
+      // Reconciles a mute set on the server (which could have been set from
+      // a since-reinstalled or different device) onto this device's local
+      // conversation/group records, which are what the UI and the
+      // playReceivedTone() mute check actually read.
+      try {
+        const { threadKeys } = await fetchMutedThreadKeys(session.token);
+        const mutedSet = new Set(threadKeys);
+        const convs = await getConversations(session.userId);
+        for (const conv of convs) {
+          if (mutedSet.has(conv.peerId) && !conv.muted) await setConversationMuted(session.userId, conv.peerId, true);
+        }
+        const grps = await getGroups(session.userId);
+        for (const group of grps) {
+          if (mutedSet.has(groupThreadKey(group.groupId)) && !group.muted) await setGroupMuted(session.userId, group.groupId, true);
+        }
+        await refreshConversations(session.userId);
+        await refreshGroups(session.userId);
+      } catch (err) {
+        console.error("Failed to sync muted threads:", err);
+      }
     }
 
     init().catch((err) => {
@@ -952,6 +1004,7 @@ export default function ChatPage() {
       lastTimestamp: c.lastTimestamp,
       favourite: c.favourite,
       unreadCount: c.unreadCount,
+      muted: c.muted,
     }));
     const groupViews: ThreadView[] = groups.map((g) => ({
       key: g.groupId,
@@ -962,6 +1015,7 @@ export default function ChatPage() {
       lastTimestamp: g.lastTimestamp,
       favourite: g.favourite,
       unreadCount: g.unreadCount,
+      muted: g.muted,
     }));
 
     let combined = chatFilter === "groups" ? groupViews : [...convViews, ...groupViews];
@@ -1073,7 +1127,7 @@ export default function ChatPage() {
     }
   }
 
-  async function handleDeleteConversation(t: ThreadView) {
+  async function handleDeleteConversation(t: { key: string; isGroup: boolean }) {
     if (!session) return;
     setLongPressKey(null);
 
@@ -1091,6 +1145,152 @@ export default function ChatPage() {
       await refreshConversations(session.userId);
     }
     if (isActive) handleBackToList();
+  }
+
+  async function handleToggleFavouriteActive() {
+    if (!session) return;
+    setShowChatMenu(false);
+    if (activeGroup) {
+      await toggleGroupFavourite(session.userId, activeGroup.groupId);
+      await refreshGroups(session.userId);
+      setActiveGroup((g) => (g ? { ...g, favourite: !g.favourite } : g));
+    } else if (activePeer) {
+      await toggleFavourite(session.userId, activePeer.peerId);
+      await refreshConversations(session.userId);
+      setActivePeer((p) => (p ? { ...p, favourite: !p.favourite } : p));
+    }
+  }
+
+  async function handleClearChat() {
+    if (!session) return;
+    setShowChatMenu(false);
+    if (activeGroup) {
+      const threadKey = groupThreadKey(activeGroup.groupId);
+      const history = await getMessages(session.userId, threadKey);
+      await Promise.all(history.filter((m) => m.kind === "FILE").map((m) => deleteCachedFile(session.userId, m.id)));
+      await clearGroupMessages(session.userId, activeGroup.groupId);
+      await refreshGroups(session.userId);
+    } else if (activePeer) {
+      const history = await getMessages(session.userId, activePeer.peerId);
+      await Promise.all(history.filter((m) => m.kind === "FILE").map((m) => deleteCachedFile(session.userId, m.id)));
+      await clearConversationMessages(session.userId, activePeer.peerId);
+      await refreshConversations(session.userId);
+    }
+    setMessages([]);
+  }
+
+  // Mute is confirmed server-side first (it's what actually suppresses a
+  // push notification while the app isn't foregrounded -- see
+  // signal.gateway.ts) so the local flag, which drives the in-app sound
+  // check, never claims a mute the server doesn't also know about.
+  async function handleToggleMuteActive() {
+    if (!session) return;
+    setShowChatMenu(false);
+    try {
+      if (activeGroup) {
+        const next = !activeGroup.muted;
+        if (next) await muteThreadApi(session.token, { groupId: activeGroup.groupId });
+        else await unmuteThreadApi(session.token, { groupId: activeGroup.groupId });
+        await setGroupMuted(session.userId, activeGroup.groupId, next);
+        await refreshGroups(session.userId);
+        setActiveGroup((g) => (g ? { ...g, muted: next } : g));
+      } else if (activePeer) {
+        const next = !activePeer.muted;
+        if (next) await muteThreadApi(session.token, { peerId: activePeer.peerId });
+        else await unmuteThreadApi(session.token, { peerId: activePeer.peerId });
+        await setConversationMuted(session.userId, activePeer.peerId, next);
+        await refreshConversations(session.userId);
+        setActivePeer((p) => (p ? { ...p, muted: next } : p));
+      }
+    } catch (err) {
+      console.error("Failed to toggle mute:", err);
+      setStatusMessage(err instanceof Error ? err.message : "Failed to update mute setting.");
+    }
+  }
+
+  // Blocking is 1:1 only -- there's no sense in blocking a group thread.
+  async function handleToggleBlockActive() {
+    if (!session || !activePeer || activeGroup) return;
+    setShowChatMenu(false);
+    const peerId = activePeer.peerId;
+    const isBlocked = blockedUserIds.has(peerId);
+    try {
+      if (isBlocked) {
+        await unblockUserApi(session.token, peerId);
+        setBlockedUserIds((prev) => {
+          const next = new Set(prev);
+          next.delete(peerId);
+          return next;
+        });
+      } else {
+        await blockUserApi(session.token, peerId);
+        setBlockedUserIds((prev) => new Set(prev).add(peerId));
+      }
+    } catch (err) {
+      console.error("Failed to toggle block:", err);
+      setStatusMessage(err instanceof Error ? err.message : "Failed to update block.");
+    }
+  }
+
+  async function handleReportSubmit(reason: string) {
+    if (!session || !activePeer) return;
+    await reportUserApi(session.token, activePeer.peerId, reason);
+  }
+
+  function handleToggleSelectMode() {
+    setShowChatMenu(false);
+    setSelectMode((v) => !v);
+    setSelectedMessageIds(new Set());
+  }
+
+  function handleToggleMessageSelected(messageId: string) {
+    setSelectedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }
+
+  async function handleDeleteSelectedMessages() {
+    for (const id of selectedMessageIds) {
+      await handleDeleteMessage(id);
+    }
+    setSelectMode(false);
+    setSelectedMessageIds(new Set());
+  }
+
+  function handleOpenChatSearch() {
+    setShowChatMenu(false);
+    setChatSearchOpen(true);
+    setChatSearchQuery("");
+    setChatSearchIndex(0);
+  }
+
+  function handleCloseChatSearch() {
+    setChatSearchOpen(false);
+    setChatSearchQuery("");
+  }
+
+  const chatSearchMatches = useMemo(() => {
+    const q = chatSearchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return messages.filter((m) => (m.kind ?? "TEXT") === "TEXT" && m.body.toLowerCase().includes(q)).map((m) => m.id);
+  }, [messages, chatSearchQuery]);
+
+  useEffect(() => {
+    if (chatSearchIndex >= chatSearchMatches.length) setChatSearchIndex(0);
+  }, [chatSearchMatches, chatSearchIndex]);
+
+  useEffect(() => {
+    const id = chatSearchMatches[chatSearchIndex];
+    if (!id) return;
+    document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [chatSearchMatches, chatSearchIndex]);
+
+  function handleSearchStep(direction: 1 | -1) {
+    if (chatSearchMatches.length === 0) return;
+    setChatSearchIndex((i) => (i + direction + chatSearchMatches.length) % chatSearchMatches.length);
   }
 
   async function handleSearchSubmit(e: React.FormEvent) {
@@ -2009,6 +2209,7 @@ export default function ChatPage() {
                   <span className="peer">
                     {t.isGroup && "👥 "}
                     {t.name}
+                    {t.muted && <span className="mute-indicator" title="Muted">🔕</span>}
                   </span>
                   {isTyping ? (
                     <span className="preview preview-typing">
@@ -2063,6 +2264,76 @@ export default function ChatPage() {
         ) : (
           <>
           <div className="chat-thread-col">
+            {selectMode ? (
+              <div className="chat-header chat-select-toolbar">
+                <button
+                  type="button"
+                  className="chat-toolbar-close-btn"
+                  onClick={() => {
+                    setSelectMode(false);
+                    setSelectedMessageIds(new Set());
+                  }}
+                  aria-label="Cancel selection"
+                >
+                  ✕
+                </button>
+                <span className="chat-select-count">{selectedMessageIds.size} selected</span>
+                <button
+                  type="button"
+                  className="chat-info-btn"
+                  onClick={handleDeleteSelectedMessages}
+                  disabled={selectedMessageIds.size === 0}
+                  aria-label="Delete selected"
+                  title="Delete selected"
+                >
+                  <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" strokeWidth="1.8">
+                    <path d="M5 7h14" strokeLinecap="round" />
+                    <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M7 7l1 13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-13" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M10 11v6M14 11v6" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            ) : chatSearchOpen ? (
+              <div className="chat-header chat-search-bar">
+                <button type="button" className="chat-toolbar-close-btn" onClick={handleCloseChatSearch} aria-label="Close search">
+                  ←
+                </button>
+                <input
+                  autoFocus
+                  className="chat-search-input"
+                  placeholder="Search in this chat"
+                  value={chatSearchQuery}
+                  onChange={(e) => {
+                    setChatSearchQuery(e.target.value);
+                    setChatSearchIndex(0);
+                  }}
+                />
+                {chatSearchQuery.trim() && (
+                  <span className="chat-search-count">
+                    {chatSearchMatches.length ? `${chatSearchIndex + 1}/${chatSearchMatches.length}` : "0/0"}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="chat-info-btn"
+                  onClick={() => handleSearchStep(-1)}
+                  disabled={chatSearchMatches.length === 0}
+                  aria-label="Previous match"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="chat-info-btn"
+                  onClick={() => handleSearchStep(1)}
+                  disabled={chatSearchMatches.length === 0}
+                  aria-label="Next match"
+                >
+                  ↓
+                </button>
+              </div>
+            ) : (
             <div className="chat-header">
               <button type="button" className="chat-back-btn" onClick={handleBackToList} aria-label="Back to chats">
                 ←
@@ -2075,7 +2346,10 @@ export default function ChatPage() {
                   online={!activeGroup && activePeer ? presenceByUserId[activePeer.peerId]?.online : undefined}
                 />
                 <span className="chat-header-text">
-                  <span className="chat-header-name">{activeGroup ? activeGroup.name : activePeer!.peerUsername}</span>
+                  <span className="chat-header-name">
+                    {activeGroup ? activeGroup.name : activePeer!.peerUsername}
+                    {(activeGroup ? activeGroup.muted : activePeer?.muted) && <span className="mute-indicator" title="Muted">🔕</span>}
+                  </span>
                   <span className="lock">
                     {(() => {
                       const typingUsers = typingByThread[activeKey ?? ""];
@@ -2083,13 +2357,14 @@ export default function ChatPage() {
                         return activeGroup ? `${typingUsers.join(", ")} typing...` : "typing...";
                       }
                       if (activeGroup) return `${activeGroup.members.length} members`;
+                      if (activePeer && blockedUserIds.has(activePeer.peerId)) return "Blocked";
                       return peerStatusLine(activePeer ? presenceByUserId[activePeer.peerId] : undefined);
                     })()}
                   </span>
                 </span>
               </div>
               <div className="chat-header-actions">
-                {!activeGroup && (
+                {!activeGroup && !(activePeer && blockedUserIds.has(activePeer.peerId)) && (
                   <button
                     type="button"
                     className="chat-info-btn"
@@ -2103,7 +2378,7 @@ export default function ChatPage() {
                     </svg>
                   </button>
                 )}
-                {!activeGroup && (
+                {!activeGroup && !(activePeer && blockedUserIds.has(activePeer.peerId)) && (
                   <button
                     type="button"
                     className="chat-info-btn"
@@ -2130,8 +2405,87 @@ export default function ChatPage() {
                     <circle cx="12" cy="7.8" r="0.9" fill="currentColor" stroke="none" />
                   </svg>
                 </button>
+                <div className="kebab-wrap">
+                  <button
+                    type="button"
+                    className="chat-info-btn"
+                    onClick={() => setShowChatMenu((v) => !v)}
+                    aria-label="More options"
+                    title="More options"
+                  >
+                    ⋮
+                  </button>
+                  {showChatMenu && (
+                    <>
+                      <div className="menu-backdrop" onClick={() => setShowChatMenu(false)} />
+                      <div className="dropdown-menu chat-header-menu">
+                        <button
+                          className="dropdown-item"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            setShowContactDetails(true);
+                          }}
+                        >
+                          Contact info
+                        </button>
+                        <button className="dropdown-item" onClick={handleOpenChatSearch}>
+                          Search
+                        </button>
+                        <button className="dropdown-item" onClick={handleToggleSelectMode}>
+                          Select messages
+                        </button>
+                        <button className="dropdown-item" onClick={handleToggleMuteActive}>
+                          {(activeGroup ? activeGroup.muted : activePeer?.muted) ? "Unmute notifications" : "Mute notifications"}
+                        </button>
+                        <button className="dropdown-item" onClick={handleToggleFavouriteActive}>
+                          {(activeGroup ? activeGroup.favourite : activePeer?.favourite)
+                            ? "Remove from favourites"
+                            : "Add to favourites"}
+                        </button>
+                        <button className="dropdown-item" onClick={handleClearChat}>
+                          Clear chat
+                        </button>
+                        <button
+                          className="dropdown-item danger"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            handleDeleteConversation({ key: activeKey!, isGroup: !!activeGroup });
+                          }}
+                        >
+                          Delete chat
+                        </button>
+                        {!activeGroup && (
+                          <button
+                            className="dropdown-item"
+                            onClick={() => {
+                              setShowChatMenu(false);
+                              setShowReportModal(true);
+                            }}
+                          >
+                            Report
+                          </button>
+                        )}
+                        {!activeGroup && (
+                          <button className="dropdown-item danger" onClick={handleToggleBlockActive}>
+                            {activePeer && blockedUserIds.has(activePeer.peerId) ? "Unblock" : "Block"}
+                          </button>
+                        )}
+                        <button
+                          className="dropdown-item"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            handleBackToList();
+                          }}
+                        >
+                          Close chat
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
+            )}
             <div className="message-list" ref={messageListRef}>
               {messages.map((m) => {
                 const avatar = voiceAvatarFor(m);
@@ -2146,6 +2500,11 @@ export default function ChatPage() {
                     onViewImage={handleViewImage}
                     avatarName={avatar.name}
                     avatarUrl={avatar.avatarUrl}
+                    selectable={selectMode}
+                    selected={selectedMessageIds.has(m.id)}
+                    onToggleSelect={handleToggleMessageSelected}
+                    highlightQuery={chatSearchOpen ? chatSearchQuery : undefined}
+                    isActiveMatch={chatSearchOpen && chatSearchMatches[chatSearchIndex] === m.id}
                   />
                 );
               })}
@@ -2197,6 +2556,14 @@ export default function ChatPage() {
                 </button>
               </div>
             )}
+            {activePeer && blockedUserIds.has(activePeer.peerId) ? (
+              <div className="blocked-banner">
+                <span>You blocked {activePeer.peerUsername}. They can't call or message you.</span>
+                <button type="button" className="btn-secondary" onClick={handleToggleBlockActive}>
+                  Unblock
+                </button>
+              </div>
+            ) : (
             <form className="composer" onSubmit={handleSend}>
               <div className={`composer-input-pill ${isVoiceRecording ? "composer-input-pill-recording" : ""}`}>
                 {!isVoiceRecording && (
@@ -2251,6 +2618,7 @@ export default function ChatPage() {
                 )}
               </div>
             </form>
+            )}
           </div>
           {showContactDetails && (
             <ContactDetailsPanel
@@ -2285,6 +2653,14 @@ export default function ChatPage() {
           onSave={handleSaveProfile}
           onDeleteAccount={handleDeleteAccount}
           onClose={() => setShowProfileModal(false)}
+        />
+      )}
+
+      {showReportModal && activePeer && (
+        <ReportUserModal
+          username={activePeer.peerUsername}
+          onSubmit={handleReportSubmit}
+          onClose={() => setShowReportModal(false)}
         />
       )}
 

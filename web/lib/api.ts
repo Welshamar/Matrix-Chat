@@ -188,4 +188,37 @@ export function fetchPresenceBatch(token: string, userIds: string[]): Promise<Re
   return authedRequest("/api/presence/batch", token, { method: "POST", body: JSON.stringify({ userIds }) });
 }
 
+// Blocking, reporting and muting all need at least a thin server round trip
+// (see server/src/controllers/social.controller.ts): a block/mute has to be
+// enforced by the server itself (dropping messages/calls, skipping a push)
+// since it can still reach this device via a live socket or a background
+// push regardless of anything purely local.
+export function blockUser(token: string, userId: string): Promise<{ ok: true }> {
+  return authedRequest("/api/social/block", token, { method: "POST", body: JSON.stringify({ userId }) });
+}
+
+export function unblockUser(token: string, userId: string): Promise<{ ok: true }> {
+  return authedRequest("/api/social/unblock", token, { method: "POST", body: JSON.stringify({ userId }) });
+}
+
+export function fetchBlockedUserIds(token: string): Promise<{ blockedUserIds: string[] }> {
+  return authedRequest("/api/social/blocks", token, { method: "GET" });
+}
+
+export function reportUser(token: string, userId: string, reason: string): Promise<{ ok: true }> {
+  return authedRequest("/api/social/report", token, { method: "POST", body: JSON.stringify({ userId, reason }) });
+}
+
+export function muteThread(token: string, target: { peerId?: string; groupId?: string }): Promise<{ ok: true }> {
+  return authedRequest("/api/social/mute", token, { method: "POST", body: JSON.stringify(target) });
+}
+
+export function unmuteThread(token: string, target: { peerId?: string; groupId?: string }): Promise<{ ok: true }> {
+  return authedRequest("/api/social/unmute", token, { method: "POST", body: JSON.stringify(target) });
+}
+
+export function fetchMutedThreadKeys(token: string): Promise<{ threadKeys: string[] }> {
+  return authedRequest("/api/social/mutes", token, { method: "GET" });
+}
+
 export { API_URL };

@@ -1,4 +1,5 @@
 import { Server, Socket } from "socket.io";
+import { prisma } from "../db/prisma";
 import { isUserOnline, userRoom } from "./signal.gateway";
 import {
   CallAnswerPayload,
@@ -72,12 +73,22 @@ export function registerCallGateway(io: Server): void {
   io.on("connection", (socket: Socket) => {
     const userId = socket.data.userId as string;
 
-    socket.on("call:invite", (payload: unknown, ack?: (res: SocketAck) => void) => {
+    socket.on("call:invite", async (payload: unknown, ack?: (res: SocketAck) => void) => {
       if (!isValidInvitePayload(payload)) {
         ack?.({ ok: false, error: "Malformed call:invite payload." });
         return;
       }
       if (!isUserOnline(payload.toUserId)) {
+        ack?.({ ok: false, error: "That person is offline." });
+        return;
+      }
+
+      // Same "looks like a normal failure" treatment as a blocked message:
+      // the caller sees "offline", never that they've been blocked.
+      const blocked = await prisma.block.findUnique({
+        where: { blockerId_blockedId: { blockerId: payload.toUserId, blockedId: userId } },
+      });
+      if (blocked) {
         ack?.({ ok: false, error: "That person is offline." });
         return;
       }

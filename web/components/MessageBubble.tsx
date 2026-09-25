@@ -102,6 +102,39 @@ interface MessageBubbleProps {
   // strings rather than an object so the memoized bubble stays memoized.
   avatarName?: string;
   avatarUrl?: string | null;
+  // "Select messages" mode: while active, tapping the row toggles selection
+  // instead of its normal behavior (reply-swipe, view-once tap, etc).
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (messageId: string) => void;
+  // In-chat search: non-empty while a search is active, wraps each match in
+  // <mark>; `isActiveMatch` additionally rings the currently-focused result
+  // so scrollIntoView has something visually obvious to land on.
+  highlightQuery?: string;
+  isActiveMatch?: boolean;
+}
+
+function highlightText(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let idx = lower.indexOf(lowerQ);
+  if (idx === -1) return text;
+  while (idx !== -1) {
+    parts.push(text.slice(cursor, idx));
+    parts.push(
+      <mark key={idx} className="search-highlight">
+        {text.slice(idx, idx + q.length)}
+      </mark>
+    );
+    cursor = idx + q.length;
+    idx = lower.indexOf(lowerQ, cursor);
+  }
+  parts.push(text.slice(cursor));
+  return parts;
 }
 
 // Memoized — the parent chat page is one large component that re-renders
@@ -109,7 +142,21 @@ interface MessageBubbleProps {
 // this, every message bubble in the whole thread re-executes on every one
 // of those renders, which is what made typing feel laggy once the other
 // side's typing status started updating on top of your own keystrokes.
-function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewImage, showSender, avatarName, avatarUrl }: MessageBubbleProps) {
+function MessageBubbleImpl({
+  message,
+  onOpenViewOnce,
+  onReply,
+  onDelete,
+  onViewImage,
+  showSender,
+  avatarName,
+  avatarUrl,
+  selectable,
+  selected,
+  onToggleSelect,
+  highlightQuery,
+  isActiveMatch,
+}: MessageBubbleProps) {
   const [revealed, setRevealed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dragX, setDragX] = useState(0);
@@ -249,7 +296,7 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
     );
   }
 
-  let body: React.ReactNode = message.body;
+  let body: React.ReactNode = highlightQuery ? highlightText(message.body, highlightQuery) : message.body;
   let bubbleClass = `bubble ${message.direction}`;
 
   if (isIncomingUnopened) {
@@ -401,7 +448,22 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
   }
 
   return (
-    <div className={`bubble-row ${message.direction}`}>
+    <div id={`msg-${message.id}`} className={`bubble-row ${message.direction} ${isActiveMatch ? "search-match-active" : ""}`}>
+      {selectable && (
+        <button
+          type="button"
+          className={`msg-select-checkbox ${selected ? "checked" : ""}`}
+          onClick={() => onToggleSelect?.(message.id)}
+          aria-label={selected ? "Deselect message" : "Select message"}
+          aria-pressed={selected}
+        >
+          {selected && (
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M5 12l5 5 9-11" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+        </button>
+      )}
       <div
         className="msg-swipe-icon"
         style={{
@@ -414,11 +476,11 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
       <div
         className={bubbleClass}
         style={dragX ? { transform: `translateX(${dragX}px)`, transition: swiping ? "none" : "transform 0.15s ease" } : undefined}
-        onClick={isIncomingUnopened ? handleTap : undefined}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onClick={selectable ? () => onToggleSelect?.(message.id) : isIncomingUnopened ? handleTap : undefined}
+        onPointerDown={selectable ? undefined : handlePointerDown}
+        onPointerMove={selectable ? undefined : handlePointerMove}
+        onPointerUp={selectable ? undefined : endDrag}
+        onPointerCancel={selectable ? undefined : endDrag}
       >
         {showSender && message.direction === "in" && message.senderUsername && (
           <span className="group-sender-label">{message.senderUsername}</span>
@@ -445,19 +507,21 @@ function MessageBubbleImpl({ message, onOpenViewOnce, onReply, onDelete, onViewI
           )}
         </span>
 
-        <button
-          type="button"
-          className="msg-menu-trigger"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuOpen((v) => !v);
-          }}
-          aria-label="Message options"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4">
-            <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
+        {!selectable && (
+          <button
+            type="button"
+            className="msg-menu-trigger"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((v) => !v);
+            }}
+            aria-label="Message options"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         {menuOpen && (
           <>
             <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />

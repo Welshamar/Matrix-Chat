@@ -50,6 +50,62 @@ model User {
   receivedMessages Message[]     @relation("ReceivedMessages")
   groupMemberships GroupMember[]
   attachments      Attachment[]
+  blocksMade       Block[]       @relation("BlocksMade")
+  blocksReceived   Block[]       @relation("BlocksReceived")
+  reportsMade      Report[]      @relation("ReportsMade")
+  reportsReceived  Report[]      @relation("ReportsReceived")
+  mutedThreads     MutedThread[]
+}
+
+// A one-directional block: while it exists, the server silently drops the
+// blocked user's messages and call invites to the blocker instead of
+// relaying them (see signal.gateway.ts / call.gateway.ts) -- the blocked
+// side sees no error, exactly like a normal delivery, so blocking can't be
+// detected from their side.
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlocksMade", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+// A user-submitted report for manual review. Messages are E2E encrypted so
+// the server has no content to inspect automatically -- this just queues a
+// reporter-supplied reason against an account, per the privacy policy's
+// "may suspend... from a credible report" language.
+model Report {
+  id         String   @id @default(uuid())
+  reporterId String
+  reportedId String
+  reason     String
+  createdAt  DateTime @default(now())
+
+  reporter User @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User @relation("ReportsReceived", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@index([reportedId])
+}
+
+// Which of a user's own threads they've muted -- checked before sending a
+// push notification (see signal.gateway.ts). `threadKey` is either the
+// peer's userId (1:1) or `group:<groupId>`, mirroring the client's own
+// groupThreadKey() convention, so one column covers both thread types with
+// a single clean unique constraint.
+model MutedThread {
+  id        String   @id @default(uuid())
+  userId    String
+  threadKey String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, threadKey])
 }
 
 // Long-term Curve25519 identity public key (Signal Protocol IdentityKey).

@@ -49,6 +49,7 @@ export interface Conversation {
   lastTimestamp: string;
   favourite?: boolean;
   unreadCount?: number;
+  muted?: boolean;
 }
 
 export type GroupRole = "ADMIN" | "MEMBER";
@@ -69,6 +70,7 @@ export interface LocalGroup {
   lastTimestamp: string;
   favourite?: boolean;
   unreadCount?: number;
+  muted?: boolean;
 }
 
 // Group message history reuses getMessages/appendMessage/etc. below under
@@ -182,6 +184,7 @@ export async function upsertConversation(
     lastTimestamp: patch.lastTimestamp ?? current?.lastTimestamp ?? new Date().toISOString(),
     favourite: patch.favourite ?? current?.favourite ?? false,
     unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
+    muted: patch.muted ?? current?.muted ?? false,
   };
   const others = existing.filter((c) => c.peerId !== patch.peerId);
   const updated = [merged, ...others].sort(
@@ -195,6 +198,22 @@ export async function toggleFavourite(userId: string, peerId: string): Promise<v
   const current = existing.find((c) => c.peerId === peerId);
   if (!current) return;
   await upsertConversation(userId, { peerId, favourite: !current.favourite });
+}
+
+// Local half of muting -- suppresses this device's own notification sound
+// for the thread. The server independently tracks the same mute (see
+// muteThread/unmuteThread in lib/api.ts) so it can also skip a push
+// notification while the app isn't in the foreground at all.
+export async function setConversationMuted(userId: string, peerId: string, muted: boolean): Promise<void> {
+  await upsertConversation(userId, { peerId, muted });
+}
+
+// "Clear chat": wipes message history but keeps the conversation itself in
+// the sidebar, unlike deleteConversation. Mirrors deleteMessage's "delete
+// for me" scope -- this device's cache only.
+export async function clearConversationMessages(userId: string, peerId: string): Promise<void> {
+  await set(`conv:${peerId}`, [], messagesStore(userId));
+  await upsertConversation(userId, { peerId, lastMessage: "", lastTimestamp: new Date().toISOString() });
 }
 
 export async function incrementUnread(userId: string, peerId: string): Promise<void> {
@@ -238,6 +257,7 @@ export async function upsertGroup(userId: string, patch: Partial<LocalGroup> & {
     lastTimestamp: patch.lastTimestamp ?? current?.lastTimestamp ?? new Date().toISOString(),
     favourite: patch.favourite ?? current?.favourite ?? false,
     unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
+    muted: patch.muted ?? current?.muted ?? false,
   };
   const others = existing.filter((g) => g.groupId !== patch.groupId);
   const updated = [merged, ...others].sort(
@@ -251,6 +271,16 @@ export async function toggleGroupFavourite(userId: string, groupId: string): Pro
   const current = existing.find((g) => g.groupId === groupId);
   if (!current) return;
   await upsertGroup(userId, { groupId, favourite: !current.favourite });
+}
+
+export async function setGroupMuted(userId: string, groupId: string, muted: boolean): Promise<void> {
+  await upsertGroup(userId, { groupId, muted });
+}
+
+// Same as clearConversationMessages, for a group thread.
+export async function clearGroupMessages(userId: string, groupId: string): Promise<void> {
+  await set(`conv:${groupThreadKey(groupId)}`, [], messagesStore(userId));
+  await upsertGroup(userId, { groupId, lastMessage: "", lastTimestamp: new Date().toISOString() });
 }
 
 export async function incrementGroupUnread(userId: string, groupId: string): Promise<void> {

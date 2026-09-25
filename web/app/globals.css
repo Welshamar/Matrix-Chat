@@ -693,6 +693,95 @@ input {
   color: var(--accent);
 }
 
+.chat-toolbar-close-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  padding: 4px 8px 4px 0;
+  flex-shrink: 0;
+}
+
+.chat-header-menu {
+  min-width: 190px;
+}
+
+.mute-indicator {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.chat-select-toolbar,
+.chat-search-bar {
+  background: var(--bg-panel-elevated);
+}
+
+.chat-select-count {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.chat-search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  min-width: 0;
+}
+
+.chat-search-count {
+  color: var(--text-dim);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.search-highlight {
+  background: var(--accent);
+  color: var(--bubble-out-text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.bubble-row.search-match-active .bubble {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.msg-select-checkbox {
+  flex-shrink: 0;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--text-dim);
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  margin: 0 4px;
+}
+
+.msg-select-checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.blocked-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
 .chat-empty-state {
   flex: 1;
   display: flex;
