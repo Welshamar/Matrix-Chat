@@ -213,6 +213,7 @@ export default function ChatPage() {
   // link is weak, and whether video was paused (mine / theirs) to cope with it.
   const [callReconnecting, setCallReconnecting] = useState(false);
   const [callWeak, setCallWeak] = useState(false);
+  const [callNoAudio, setCallNoAudio] = useState(false);
   const [callMyVideoPaused, setCallMyVideoPaused] = useState(false);
   const [callPeerVideoPaused, setCallPeerVideoPaused] = useState(false);
 
@@ -1850,6 +1851,7 @@ export default function ChatPage() {
     setCallReactions([]);
     setCallReconnecting(false);
     setCallWeak(false);
+    setCallNoAudio(false);
     setCallMyVideoPaused(false);
     setCallPeerVideoPaused(false);
   }
@@ -1882,6 +1884,7 @@ export default function ChatPage() {
         onLocalStream: setCallLocalStream,
         onConnectionChange: (state) => setCallReconnecting(state === "reconnecting"),
         onQuality: ({ weak }) => setCallWeak(weak),
+        onNoAudioDetected: () => setCallNoAudio(true),
         onVideoPaused: (paused) => {
           setCallMyVideoPaused(paused);
           // Tell the other side why my picture stopped (and when it's back) --
@@ -2861,6 +2864,7 @@ export default function ChatPage() {
           reactions={callReactions}
           reconnecting={callReconnecting}
           weakConnection={callWeak}
+          noAudio={callNoAudio}
           myVideoPaused={callMyVideoPaused}
           peerVideoPaused={callPeerVideoPaused}
           onToggleCamera={toggleCallCamera}

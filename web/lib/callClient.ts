@@ -25,6 +25,12 @@ export interface CallClientHandlers {
   // My video was paused / resumed automatically because of the connection (not
   // because the person turned the camera off), so the other side can say why.
   onVideoPaused?: (paused: boolean) => void;
+  // The peer connection reports "connected" (ICE/DTLS is up) but no inbound
+  // audio RTP has actually arrived after a grace period -- a real failure
+  // mode on some NAT/TURN combinations that otherwise looks like a normal,
+  // silent, "successful" call with nothing to tell the user something's
+  // wrong. Fires at most once per call.
+  onNoAudioDetected?: () => void;
 }
 
 export type CameraFacing = "user" | "environment";
@@ -67,6 +73,9 @@ const DISCONNECT_GRACE_MS = 4000;
 const RESTART_RETRY_MS = 7000;
 const GIVE_UP_MS = 45000;
 const QUALITY_INTERVAL_MS = 3000;
+// How long to wait after ICE reports "connected" before treating zero
+// inbound audio packets as a real problem rather than just early negotiation.
+const NO_AUDIO_GRACE_MS = 8000;
 // Video send limits per tier. Audio is a few tens of kbit/s, so capping video
 // keeps a weak uplink from starving it (which is what makes a call "break up").
 const VIDEO_BPS = [550_000, 180_000] as const;
@@ -123,6 +132,8 @@ export class CallClient {
   private severeStreak = 0;
   private goodStreak = 0;
   private lastInbound = { received: 0, lost: 0 };
+  private connectedAt: number | null = null;
+  private noAudioReported = false;
 
   constructor(
     private socket: Socket,
@@ -215,9 +226,39 @@ export class CallClient {
       this.restartTimer = null;
       this.handlers.onConnectionChange?.("connected");
     }
+    const firstConnect = this.connectedAt === null;
     this.everConnected = true;
+    if (firstConnect) this.connectedAt = Date.now();
     this.handlers.onConnected?.();
     this.startQualityMonitor();
+    if (firstConnect) this.logConnectionPath();
+  }
+
+  // One-off diagnostic: which candidate pair actually got selected (a
+  // direct host/srflx path, vs. a relayed one through TURN). Silent calls
+  // and dropped video are otherwise indistinguishable from the outside --
+  // this is the one log line that answers "was TURN even involved" without
+  // needing to reproduce the whole investigation again.
+  private async logConnectionPath(): Promise<void> {
+    try {
+      const pc = this.pc;
+      if (!pc) return;
+      const stats = await pc.getStats();
+      let pairInfo: { local?: string; remote?: string } | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const byId = new Map<string, any>();
+      stats.forEach((r: any) => byId.set(r.id, r));
+      stats.forEach((r: any) => {
+        if (r.type === "candidate-pair" && (r.selected || (r.nominated && r.state === "succeeded"))) {
+          const local = byId.get(r.localCandidateId);
+          const remote = byId.get(r.remoteCandidateId);
+          pairInfo = { local: local?.candidateType, remote: remote?.candidateType };
+        }
+      });
+      console.info("[call] connected via", pairInfo ?? "unknown candidate pair");
+    } catch {
+      // Diagnostic only -- never worth failing the call over.
+    }
   }
 
   private beginReconnect(): void {
@@ -329,6 +370,7 @@ export class CallClient {
     let received = 0;
     let lost = 0;
     let outLoss = 0;
+    let audioPacketsReceived = 0;
     let rttMs: number | undefined;
     let availableBps: number | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -336,6 +378,7 @@ export class CallClient {
       if (r.type === "inbound-rtp") {
         received += r.packetsReceived || 0;
         lost += r.packetsLost || 0;
+        if (r.kind === "audio" || r.mediaType === "audio") audioPacketsReceived += r.packetsReceived || 0;
       } else if (r.type === "remote-inbound-rtp") {
         outLoss = Math.max(outLoss, r.fractionLost || 0);
         if (typeof r.roundTripTime === "number") rttMs = Math.max(rttMs ?? 0, r.roundTripTime * 1000);
@@ -350,6 +393,20 @@ export class CallClient {
     this.lastInbound = { received, lost };
     const inLoss = dReceived + dLost > 20 ? Math.max(0, dLost) / (dReceived + dLost) : 0;
     const loss = Math.max(inLoss, outLoss);
+
+    // ICE/DTLS can report "connected" while the actual audio RTP never
+    // shows up -- e.g. a TURN relay that accepted the allocation but can't
+    // actually forward media. That looks, from everywhere else in this
+    // class, exactly like a normal successful call, so it needs its own
+    // explicit check rather than falling out of the loss/RTT logic above.
+    if (!this.noAudioReported && this.connectedAt !== null && audioPacketsReceived === 0) {
+      if (Date.now() - this.connectedAt > NO_AUDIO_GRACE_MS) {
+        this.noAudioReported = true;
+        this.handlers.onNoAudioDetected?.();
+      }
+    } else if (audioPacketsReceived > 0) {
+      this.noAudioReported = true; // audio showed up -- never mind
+    }
 
     // Available send bandwidth only matters while video is actually going out.
     const sendingVideo = this.cameraOn && !!this.videoSender && this.tier < 2;

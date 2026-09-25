@@ -43,6 +43,10 @@ interface CallOverlayProps {
   reconnecting: boolean;
   // The link is poor right now.
   weakConnection: boolean;
+  // Connected per ICE/DTLS, but no inbound audio has actually arrived --
+  // usually a TURN relay that accepted the connection but can't forward
+  // media. Otherwise indistinguishable from a normal silent moment.
+  noAudio: boolean;
   // Video was paused automatically to protect the audio (mine / the other person's).
   myVideoPaused: boolean;
   peerVideoPaused: boolean;
@@ -154,6 +158,7 @@ export function CallOverlay({
   reactions,
   reconnecting,
   weakConnection,
+  noAudio,
   myVideoPaused,
   peerVideoPaused,
   onToggleCamera,
@@ -265,14 +270,16 @@ export function CallOverlay({
   // Shown over the call while the connection is down or poor, so a freeze or a
   // dropout is explained instead of just happening.
   const netBanner =
-    live && !error && (reconnecting || weakConnection) ? (
+    live && !error && (reconnecting || weakConnection || noAudio) ? (
       <div className={`call-net-banner ${reconnecting ? "reconnecting" : ""}`} role="status" data-testid="call-net-banner">
         <span className="call-net-dot" aria-hidden="true" />
         {reconnecting
           ? "Reconnecting… waiting for your connection"
-          : myVideoPaused
-            ? "Weak connection — video paused to keep the call clear"
-            : "Weak connection"}
+          : noAudio
+            ? "No audio is coming through — try switching Wi-Fi/mobile data, or reconnect the call"
+            : myVideoPaused
+              ? "Weak connection — video paused to keep the call clear"
+              : "Weak connection"}
       </div>
     ) : null;
 
