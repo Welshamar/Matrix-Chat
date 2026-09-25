@@ -55,16 +55,20 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { registerForPushNotifications } from "@/lib/pushNotifications";
 import {
   appendMessage,
+  ChatTheme,
   clearConversationMessages,
   clearGroupMessages,
   clearGroupUnread,
   clearUnread,
   Conversation,
+  createList,
   deleteConversation,
   deleteGroupThread,
+  deleteList,
   deleteMessage,
   getConversations,
   getGroups,
+  getLists,
   getMessages,
   groupThreadKey,
   incrementGroupUnread,
@@ -73,9 +77,15 @@ import {
   LocalMessage,
   markViewOnceOpened,
   setConversationMuted,
+  setConversationTheme,
+  setDisappearingTimer,
+  setGroupDisappearingTimer,
   setGroupMuted,
+  setGroupTheme,
+  toggleConversationList,
   toggleFavourite,
   toggleGroupFavourite,
+  toggleGroupList,
   updateMessageStatus,
   upsertConversation,
   upsertGroup,
@@ -88,6 +98,10 @@ import { ProfileModal } from "@/components/ProfileModal";
 import { NewGroupModal } from "@/components/NewGroupModal";
 import { GroupInfoModal } from "@/components/GroupInfoModal";
 import { ReportUserModal } from "@/components/ReportUserModal";
+import { DisappearingMessagesModal } from "@/components/DisappearingMessagesModal";
+import { ChatThemeModal } from "@/components/ChatThemeModal";
+import { AddToListModal } from "@/components/AddToListModal";
+import { buildChatTranscript, downloadTextFile } from "@/lib/exportChat";
 import { ContactDetailsPanel } from "@/components/ContactDetailsPanel";
 import { CallOverlay, CallStatus } from "@/components/CallOverlay";
 import { CALL_REACTION_LIFETIME_MS, CallReaction } from "@/components/CallReactions";
@@ -103,7 +117,10 @@ import {
 } from "@/lib/attachments";
 import { ImageViewer } from "@/components/ImageViewer";
 
-type ChatFilter = "all" | "unread" | "favourites" | "groups";
+// A custom list (see "Add to list") is addressed as `list:<name>` so it
+// slots into the same filter-tab mechanism as the built-in tabs without a
+// separate parallel piece of state.
+type ChatFilter = "all" | "unread" | "favourites" | "groups" | `list:${string}`;
 
 interface ThreadView {
   key: string;
@@ -115,6 +132,7 @@ interface ThreadView {
   favourite?: boolean;
   unreadCount?: number;
   muted?: boolean;
+  lists?: string[];
 }
 
 export default function ChatPage() {
@@ -161,6 +179,10 @@ export default function ChatPage() {
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
   const [showReportModal, setShowReportModal] = useState(false);
+  const [showDisappearingModal, setShowDisappearingModal] = useState(false);
+  const [showThemeModal, setShowThemeModal] = useState(false);
+  const [showAddToListModal, setShowAddToListModal] = useState(false);
+  const [lists, setLists] = useState<string[]>([]);
   const [callStatus, setCallStatus] = useState<CallStatus | null>(null);
   const [callPeer, setCallPeer] = useState<{ userId: string; username: string; avatarUrl?: string | null } | null>(
     null
@@ -975,6 +997,8 @@ export default function ChatPage() {
       } catch (err) {
         console.error("Failed to sync muted threads:", err);
       }
+
+      setLists(await getLists(session.userId));
     }
 
     init().catch((err) => {
@@ -1005,6 +1029,7 @@ export default function ChatPage() {
       favourite: c.favourite,
       unreadCount: c.unreadCount,
       muted: c.muted,
+      lists: c.lists,
     }));
     const groupViews: ThreadView[] = groups.map((g) => ({
       key: g.groupId,
@@ -1016,11 +1041,16 @@ export default function ChatPage() {
       favourite: g.favourite,
       unreadCount: g.unreadCount,
       muted: g.muted,
+      lists: g.lists,
     }));
 
     let combined = chatFilter === "groups" ? groupViews : [...convViews, ...groupViews];
     if (chatFilter === "unread") combined = combined.filter((t) => (t.unreadCount ?? 0) > 0);
     if (chatFilter === "favourites") combined = combined.filter((t) => t.favourite);
+    if (chatFilter.startsWith("list:")) {
+      const listName = chatFilter.slice("list:".length);
+      combined = combined.filter((t) => t.lists?.includes(listName));
+    }
 
     const query = searchQuery.trim().toLowerCase();
     if (query) combined = combined.filter((t) => t.name.toLowerCase().includes(query));
@@ -1235,6 +1265,66 @@ export default function ChatPage() {
   async function handleReportSubmit(reason: string) {
     if (!session || !activePeer) return;
     await reportUserApi(session.token, activePeer.peerId, reason);
+  }
+
+  async function handleSetDisappearing(seconds: number | null) {
+    if (!session) return;
+    if (activeGroup) {
+      await setGroupDisappearingTimer(session.userId, activeGroup.groupId, seconds);
+      await refreshGroups(session.userId);
+      setActiveGroup((g) => (g ? { ...g, disappearingSeconds: seconds } : g));
+    } else if (activePeer) {
+      await setDisappearingTimer(session.userId, activePeer.peerId, seconds);
+      await refreshConversations(session.userId);
+      setActivePeer((p) => (p ? { ...p, disappearingSeconds: seconds } : p));
+    }
+  }
+
+  async function handleSetTheme(theme: ChatTheme) {
+    if (!session) return;
+    if (activeGroup) {
+      await setGroupTheme(session.userId, activeGroup.groupId, theme);
+      await refreshGroups(session.userId);
+      setActiveGroup((g) => (g ? { ...g, theme } : g));
+    } else if (activePeer) {
+      await setConversationTheme(session.userId, activePeer.peerId, theme);
+      await refreshConversations(session.userId);
+      setActivePeer((p) => (p ? { ...p, theme } : p));
+    }
+  }
+
+  async function handleToggleList(listName: string) {
+    if (!session) return;
+    if (activeGroup) {
+      await toggleGroupList(session.userId, activeGroup.groupId, listName);
+      await refreshGroups(session.userId);
+      setActiveGroup((g) =>
+        g ? { ...g, lists: g.lists?.includes(listName) ? g.lists.filter((l) => l !== listName) : [...(g.lists ?? []), listName] } : g
+      );
+    } else if (activePeer) {
+      await toggleConversationList(session.userId, activePeer.peerId, listName);
+      await refreshConversations(session.userId);
+      setActivePeer((p) =>
+        p ? { ...p, lists: p.lists?.includes(listName) ? p.lists.filter((l) => l !== listName) : [...(p.lists ?? []), listName] } : p
+      );
+    }
+  }
+
+  async function handleCreateList(name: string) {
+    if (!session) return;
+    await createList(session.userId, name);
+    setLists(await getLists(session.userId));
+    await handleToggleList(name.trim());
+  }
+
+  function handleExportChat() {
+    if (!session) return;
+    setShowChatMenu(false);
+    const threadName = activeGroup ? activeGroup.name : activePeer!.peerUsername;
+    const transcript = buildChatTranscript(messages, threadName, session.username);
+    const safeName = threadName.replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+    const date = new Date().toISOString().slice(0, 10);
+    downloadTextFile(`matrix-chat-${safeName}-${date}.txt`, transcript);
   }
 
   function handleToggleSelectMode() {
@@ -2085,6 +2175,7 @@ export default function ChatPage() {
     { key: "unread", label: "Unread" },
     { key: "favourites", label: "Favourites" },
     { key: "groups", label: "Groups" },
+    ...lists.map((name) => ({ key: `list:${name}` as ChatFilter, label: name })),
   ];
 
   const activeKey = activeGroup?.groupId ?? activePeer?.peerId ?? null;
@@ -2437,10 +2528,40 @@ export default function ChatPage() {
                         <button className="dropdown-item" onClick={handleToggleMuteActive}>
                           {(activeGroup ? activeGroup.muted : activePeer?.muted) ? "Unmute notifications" : "Mute notifications"}
                         </button>
+                        <button
+                          className="dropdown-item"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            setShowDisappearingModal(true);
+                          }}
+                        >
+                          Disappearing messages
+                        </button>
+                        <button
+                          className="dropdown-item"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            setShowThemeModal(true);
+                          }}
+                        >
+                          Chat theme
+                        </button>
                         <button className="dropdown-item" onClick={handleToggleFavouriteActive}>
                           {(activeGroup ? activeGroup.favourite : activePeer?.favourite)
                             ? "Remove from favourites"
                             : "Add to favourites"}
+                        </button>
+                        <button
+                          className="dropdown-item"
+                          onClick={() => {
+                            setShowChatMenu(false);
+                            setShowAddToListModal(true);
+                          }}
+                        >
+                          Add to list
+                        </button>
+                        <button className="dropdown-item" onClick={handleExportChat}>
+                          Export chat
                         </button>
                         <button className="dropdown-item" onClick={handleClearChat}>
                           Clear chat
@@ -2486,7 +2607,10 @@ export default function ChatPage() {
               </div>
             </div>
             )}
-            <div className="message-list" ref={messageListRef}>
+            <div
+              className={`message-list chat-theme-${(activeGroup ? activeGroup.theme : activePeer?.theme) ?? "default"}`}
+              ref={messageListRef}
+            >
               {messages.map((m) => {
                 const avatar = voiceAvatarFor(m);
                 return (
@@ -2661,6 +2785,32 @@ export default function ChatPage() {
           username={activePeer.peerUsername}
           onSubmit={handleReportSubmit}
           onClose={() => setShowReportModal(false)}
+        />
+      )}
+
+      {showDisappearingModal && (activeGroup || activePeer) && (
+        <DisappearingMessagesModal
+          current={activeGroup ? activeGroup.disappearingSeconds : activePeer?.disappearingSeconds}
+          onSelect={handleSetDisappearing}
+          onClose={() => setShowDisappearingModal(false)}
+        />
+      )}
+
+      {showThemeModal && (activeGroup || activePeer) && (
+        <ChatThemeModal
+          current={activeGroup ? activeGroup.theme : activePeer?.theme}
+          onSelect={handleSetTheme}
+          onClose={() => setShowThemeModal(false)}
+        />
+      )}
+
+      {showAddToListModal && (activeGroup || activePeer) && (
+        <AddToListModal
+          lists={lists}
+          selected={(activeGroup ? activeGroup.lists : activePeer?.lists) ?? []}
+          onToggle={handleToggleList}
+          onCreate={handleCreateList}
+          onClose={() => setShowAddToListModal(false)}
         />
       )}
 

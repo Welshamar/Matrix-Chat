@@ -39,7 +39,18 @@ export interface LocalMessage {
   // Only present for kind "FILE" — `body` is the data URL itself, this is
   // the original file's metadata (the data URL alone loses the filename).
   file?: FileMeta;
+  // "Disappearing messages": set at append time from the thread's current
+  // disappearingSeconds setting (see setDisappearingTimer). This is a
+  // declutter feature, not a security one -- the server already never
+  // retains plaintext regardless -- so a plain client-side timestamp
+  // checked by getMessages() is all that's needed.
+  expiresAt?: string;
 }
+
+// Curated background choices for "Chat theme" -- a key stored on the
+// Conversation/LocalGroup record, resolved to actual CSS in globals.css.
+export const CHAT_THEMES = ["default", "teal", "sunset", "violet", "forest", "slate"] as const;
+export type ChatTheme = (typeof CHAT_THEMES)[number];
 
 export interface Conversation {
   peerId: string;
@@ -50,6 +61,9 @@ export interface Conversation {
   favourite?: boolean;
   unreadCount?: number;
   muted?: boolean;
+  disappearingSeconds?: number | null;
+  theme?: ChatTheme;
+  lists?: string[];
 }
 
 export type GroupRole = "ADMIN" | "MEMBER";
@@ -71,6 +85,9 @@ export interface LocalGroup {
   favourite?: boolean;
   unreadCount?: number;
   muted?: boolean;
+  disappearingSeconds?: number | null;
+  theme?: ChatTheme;
+  lists?: string[];
 }
 
 // Group message history reuses getMessages/appendMessage/etc. below under
@@ -113,13 +130,36 @@ function metaStore(userId: string): UseStore {
   return store;
 }
 
+// Self-healing on read: any message whose disappearing-messages timer has
+// elapsed is dropped here and the trimmed list is written back, so no
+// separate background sweep timer is needed -- opening/refreshing a thread
+// is already enough to keep it current.
 export async function getMessages(userId: string, peerId: string): Promise<LocalMessage[]> {
-  return (await get<LocalMessage[]>(`conv:${peerId}`, messagesStore(userId))) ?? [];
+  const all = (await get<LocalMessage[]>(`conv:${peerId}`, messagesStore(userId))) ?? [];
+  const now = Date.now();
+  const live = all.filter((m) => !m.expiresAt || new Date(m.expiresAt).getTime() > now);
+  if (live.length !== all.length) await set(`conv:${peerId}`, live, messagesStore(userId));
+  return live;
+}
+
+// Centralized here (rather than at each of appendMessage's many call sites
+// in app/chat/page.tsx -- outgoing text, incoming text, files, voice notes,
+// call-log entries, both 1:1 and group) so a disappearing-messages timer
+// can never be silently skipped for one message type by an omission at a
+// call site.
+async function attachExpiry(userId: string, threadKey: string, message: LocalMessage): Promise<LocalMessage> {
+  if (message.expiresAt) return message;
+  const seconds = threadKey.startsWith("group:")
+    ? (await getGroups(userId)).find((g) => g.groupId === threadKey.slice("group:".length))?.disappearingSeconds
+    : (await getConversations(userId)).find((c) => c.peerId === threadKey)?.disappearingSeconds;
+  if (!seconds) return message;
+  return { ...message, expiresAt: new Date(Date.now() + seconds * 1000).toISOString() };
 }
 
 export async function appendMessage(userId: string, peerId: string, message: LocalMessage): Promise<void> {
   const existing = await getMessages(userId, peerId);
-  const updated = [...existing, message].slice(-MAX_MESSAGES_PER_CONVERSATION);
+  const withExpiry = await attachExpiry(userId, peerId, message);
+  const updated = [...existing, withExpiry].slice(-MAX_MESSAGES_PER_CONVERSATION);
   await set(`conv:${peerId}`, updated, messagesStore(userId));
 }
 
@@ -185,6 +225,12 @@ export async function upsertConversation(
     favourite: patch.favourite ?? current?.favourite ?? false,
     unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
     muted: patch.muted ?? current?.muted ?? false,
+    // "in patch" (not ??) because turning disappearing messages OFF means
+    // explicitly patching in `null`, which -- unlike every other field here
+    // -- must NOT fall through to the existing value the way ?? would.
+    disappearingSeconds: "disappearingSeconds" in patch ? patch.disappearingSeconds : current?.disappearingSeconds ?? null,
+    theme: patch.theme ?? current?.theme ?? "default",
+    lists: patch.lists ?? current?.lists ?? [],
   };
   const others = existing.filter((c) => c.peerId !== patch.peerId);
   const updated = [merged, ...others].sort(
@@ -206,6 +252,14 @@ export async function toggleFavourite(userId: string, peerId: string): Promise<v
 // notification while the app isn't in the foreground at all.
 export async function setConversationMuted(userId: string, peerId: string, muted: boolean): Promise<void> {
   await upsertConversation(userId, { peerId, muted });
+}
+
+export async function setDisappearingTimer(userId: string, peerId: string, seconds: number | null): Promise<void> {
+  await upsertConversation(userId, { peerId, disappearingSeconds: seconds });
+}
+
+export async function setConversationTheme(userId: string, peerId: string, theme: ChatTheme): Promise<void> {
+  await upsertConversation(userId, { peerId, theme });
 }
 
 // "Clear chat": wipes message history but keeps the conversation itself in
@@ -258,6 +312,9 @@ export async function upsertGroup(userId: string, patch: Partial<LocalGroup> & {
     favourite: patch.favourite ?? current?.favourite ?? false,
     unreadCount: patch.unreadCount ?? current?.unreadCount ?? 0,
     muted: patch.muted ?? current?.muted ?? false,
+    disappearingSeconds: "disappearingSeconds" in patch ? patch.disappearingSeconds : current?.disappearingSeconds ?? null,
+    theme: patch.theme ?? current?.theme ?? "default",
+    lists: patch.lists ?? current?.lists ?? [],
   };
   const others = existing.filter((g) => g.groupId !== patch.groupId);
   const updated = [merged, ...others].sort(
@@ -275,6 +332,14 @@ export async function toggleGroupFavourite(userId: string, groupId: string): Pro
 
 export async function setGroupMuted(userId: string, groupId: string, muted: boolean): Promise<void> {
   await upsertGroup(userId, { groupId, muted });
+}
+
+export async function setGroupDisappearingTimer(userId: string, groupId: string, seconds: number | null): Promise<void> {
+  await upsertGroup(userId, { groupId, disappearingSeconds: seconds });
+}
+
+export async function setGroupTheme(userId: string, groupId: string, theme: ChatTheme): Promise<void> {
+  await upsertGroup(userId, { groupId, theme });
 }
 
 // Same as clearConversationMessages, for a group thread.
@@ -299,4 +364,55 @@ export async function deleteGroupThread(userId: string, groupId: string): Promis
   const existing = await getGroups(userId);
   await set("groups", existing.filter((g) => g.groupId !== groupId), metaStore(userId));
   await del(`conv:${groupThreadKey(groupId)}`, messagesStore(userId));
+}
+
+// "Add to list": custom labels (e.g. "Work", "Family") a user can create to
+// organize their own sidebar -- purely local, like favourites, since it's
+// just a personal view over conversations that already exist.
+export async function getLists(userId: string): Promise<string[]> {
+  return (await get<string[]>("lists", metaStore(userId))) ?? [];
+}
+
+export async function createList(userId: string, name: string): Promise<void> {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const existing = await getLists(userId);
+  if (existing.some((l) => l.toLowerCase() === trimmed.toLowerCase())) return;
+  await set("lists", [...existing, trimmed], metaStore(userId));
+}
+
+export async function deleteList(userId: string, name: string): Promise<void> {
+  const existing = await getLists(userId);
+  await set("lists", existing.filter((l) => l !== name), metaStore(userId));
+
+  const conversations = await getConversations(userId);
+  for (const c of conversations) {
+    if (c.lists?.includes(name)) {
+      await upsertConversation(userId, { peerId: c.peerId, lists: c.lists.filter((l) => l !== name) });
+    }
+  }
+  const groups = await getGroups(userId);
+  for (const g of groups) {
+    if (g.lists?.includes(name)) {
+      await upsertGroup(userId, { groupId: g.groupId, lists: g.lists.filter((l) => l !== name) });
+    }
+  }
+}
+
+export async function toggleConversationList(userId: string, peerId: string, listName: string): Promise<void> {
+  const existing = await getConversations(userId);
+  const current = existing.find((c) => c.peerId === peerId);
+  if (!current) return;
+  const lists = current.lists ?? [];
+  const next = lists.includes(listName) ? lists.filter((l) => l !== listName) : [...lists, listName];
+  await upsertConversation(userId, { peerId, lists: next });
+}
+
+export async function toggleGroupList(userId: string, groupId: string, listName: string): Promise<void> {
+  const existing = await getGroups(userId);
+  const current = existing.find((g) => g.groupId === groupId);
+  if (!current) return;
+  const lists = current.lists ?? [];
+  const next = lists.includes(listName) ? lists.filter((l) => l !== listName) : [...lists, listName];
+  await upsertGroup(userId, { groupId, lists: next });
 }

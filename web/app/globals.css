@@ -1439,6 +1439,112 @@ input {
   margin-top: 8px;
 }
 
+.modal-subtitle {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.option-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 10px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.option-list-item:hover,
+.option-list-item.selected {
+  background: var(--bg-input);
+}
+
+.option-list-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.theme-swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.theme-swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 16px;
+}
+
+.theme-swatch.selected {
+  border-color: var(--text);
+}
+
+.theme-swatch-default {
+  background: var(--bg-panel-elevated);
+}
+
+.theme-swatch-teal {
+  background: #14b8a6;
+}
+
+.theme-swatch-sunset {
+  background: #fb923c;
+}
+
+.theme-swatch-violet {
+  background: #8b5cf6;
+}
+
+.theme-swatch-forest {
+  background: #22c55e;
+}
+
+.theme-swatch-slate {
+  background: #64748b;
+}
+
+/* Applied to .message-list -- .chat-theme-default deliberately adds no
+   background, leaving the app's normal --bg to show through. */
+.chat-theme-teal {
+  background: linear-gradient(160deg, #062f2c, #0a1f1d);
+}
+
+.chat-theme-sunset {
+  background: linear-gradient(160deg, #3b1f13, #1a0f0a);
+}
+
+.chat-theme-violet {
+  background: linear-gradient(160deg, #241a3d, #140f24);
+}
+
+.chat-theme-forest {
+  background: linear-gradient(160deg, #16301a, #0d1f10);
+}
+
+.chat-theme-slate {
+  background: linear-gradient(160deg, #202632, #12151c);
+}
+
 .danger-zone {
   margin-top: 20px;
   padding-top: 16px;
