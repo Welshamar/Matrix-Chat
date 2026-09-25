@@ -51,6 +51,8 @@ import {
   clearGroupUnread,
   clearUnread,
   Conversation,
+  deleteConversation,
+  deleteGroupThread,
   deleteMessage,
   getConversations,
   getGroups,
@@ -120,6 +122,9 @@ export default function ChatPage() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [chatFilter, setChatFilter] = useState<ChatFilter>("all");
   const [showMenu, setShowMenu] = useState(false);
+  const [longPressKey, setLongPressKey] = useState<string | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFiredRef = useRef(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   // A heavy file being encrypted and uploaded (or that failed to): drives the
@@ -1033,6 +1038,47 @@ export default function ChatPage() {
     }
   }
 
+  const LONG_PRESS_MS = 500;
+
+  // Long-press (or right-click, for desktop testing) a conversation row to
+  // open its context menu instead of opening the thread. The fired-ref lets
+  // the row's own onClick tell a genuine tap apart from the click some
+  // mobile browsers synthesize right after the touch that opened the menu.
+  function handleConversationPressStart(key: string) {
+    longPressFiredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      setLongPressKey(key);
+    }, LONG_PRESS_MS);
+  }
+
+  function handleConversationPressEnd() {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+
+  async function handleDeleteConversation(t: ThreadView) {
+    if (!session) return;
+    setLongPressKey(null);
+
+    const isActive = t.isGroup ? activeGroup?.groupId === t.key : activePeer?.peerId === t.key;
+    if (t.isGroup) {
+      const threadKey = groupThreadKey(t.key);
+      const history = await getMessages(session.userId, threadKey);
+      await Promise.all(history.filter((m) => m.kind === "FILE").map((m) => deleteCachedFile(session.userId, m.id)));
+      await deleteGroupThread(session.userId, t.key);
+      await refreshGroups(session.userId);
+    } else {
+      const history = await getMessages(session.userId, t.key);
+      await Promise.all(history.filter((m) => m.kind === "FILE").map((m) => deleteCachedFile(session.userId, m.id)));
+      await deleteConversation(session.userId, t.key);
+      await refreshConversations(session.userId);
+    }
+    if (isActive) handleBackToList();
+  }
+
   async function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!session) return;
@@ -1929,7 +1975,20 @@ export default function ChatPage() {
               <div
                 key={t.key}
                 className={`conversation-item ${activeKey === t.key ? "active" : ""}`}
-                onClick={() => handleSelectThread(t)}
+                onClick={() => {
+                  if (longPressFiredRef.current) {
+                    longPressFiredRef.current = false;
+                    return;
+                  }
+                  handleSelectThread(t);
+                }}
+                onTouchStart={() => handleConversationPressStart(t.key)}
+                onTouchEnd={handleConversationPressEnd}
+                onTouchMove={handleConversationPressEnd}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setLongPressKey(t.key);
+                }}
               >
                 <Avatar name={t.name} avatarUrl={t.avatarUrl} size={44} online={!t.isGroup ? presenceByUserId[t.key]?.online : undefined} />
                 <span className="conversation-text">
@@ -1955,6 +2014,28 @@ export default function ChatPage() {
                   </button>
                   {!!t.unreadCount && <span className="unread-badge">{t.unreadCount}</span>}
                 </span>
+                {longPressKey === t.key && (
+                  <>
+                    <div
+                      className="menu-backdrop"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLongPressKey(null);
+                      }}
+                    />
+                    <div className="dropdown-menu conversation-context-menu">
+                      <button
+                        className="dropdown-item danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteConversation(t);
+                        }}
+                      >
+                        Delete chat
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
               );
             })

@@ -431,6 +431,10 @@ input {
   background: var(--bg-input);
 }
 
+.dropdown-item.danger {
+  color: var(--danger);
+}
+
 .new-chat-fab {
   background: var(--accent);
   border: none;
@@ -510,12 +514,21 @@ input {
 }
 
 .conversation-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.conversation-context-menu {
+  top: 100%;
+  right: 16px;
+  margin-top: 4px;
 }
 
 .conversation-item:hover {

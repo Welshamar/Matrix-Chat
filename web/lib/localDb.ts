@@ -1,4 +1,4 @@
-import { createStore, get, set, update, UseStore } from "idb-keyval";
+import { createStore, del, get, set, update, UseStore } from "idb-keyval";
 import { FileMeta, ReplyRef } from "./messageEnvelope";
 
 /**
@@ -207,6 +207,16 @@ export async function clearUnread(userId: string, peerId: string): Promise<void>
   await upsertConversation(userId, { peerId, unreadCount: 0 });
 }
 
+// Removes a 1:1 chat from the sidebar and wipes its local message history.
+// Only ever affects this device -- there's no server-side conversation
+// record to delete (see the module comment above), so the other person's
+// copy of the chat is untouched.
+export async function deleteConversation(userId: string, peerId: string): Promise<void> {
+  const existing = await getConversations(userId);
+  await set("conversations", existing.filter((c) => c.peerId !== peerId), metaStore(userId));
+  await del(`conv:${peerId}`, messagesStore(userId));
+}
+
 export async function getContactUsername(userId: string, peerId: string): Promise<string | undefined> {
   const conversations = await getConversations(userId);
   return conversations.find((c) => c.peerId === peerId)?.peerUsername;
@@ -251,4 +261,12 @@ export async function incrementGroupUnread(userId: string, groupId: string): Pro
 
 export async function clearGroupUnread(userId: string, groupId: string): Promise<void> {
   await upsertGroup(userId, { groupId, unreadCount: 0 });
+}
+
+// Same as deleteConversation, for a group thread -- removes it from this
+// device's sidebar and history only; other members' copies are unaffected.
+export async function deleteGroupThread(userId: string, groupId: string): Promise<void> {
+  const existing = await getGroups(userId);
+  await set("groups", existing.filter((g) => g.groupId !== groupId), metaStore(userId));
+  await del(`conv:${groupThreadKey(groupId)}`, messagesStore(userId));
 }
