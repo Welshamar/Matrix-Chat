@@ -78,7 +78,12 @@ const QUALITY_INTERVAL_MS = 3000;
 const NO_AUDIO_GRACE_MS = 8000;
 // Video send limits per tier. Audio is a few tens of kbit/s, so capping video
 // keeps a weak uplink from starving it (which is what makes a call "break up").
-const VIDEO_BPS = [550_000, 180_000] as const;
+// Tier 0 is sized for the 720p capture below (1Mbps is the standard ballpark
+// most video-calling apps use at that resolution) -- previously this stayed
+// at 550kbps even after a capture-resolution bump, which just meant more
+// pixels squeezed through the same bitrate budget, i.e. a blockier picture,
+// not a sharper one.
+const VIDEO_BPS = [1_000_000, 300_000] as const;
 const VIDEO_FPS = [24, 12] as const;
 // Browsers default a voice call's Opus encoder to a fairly low bitrate (tuned
 // for narrowband telephony, not this app's echo-cancelled/noise-suppressed
@@ -91,10 +96,11 @@ const AUDIO_BPS = 64_000;
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
 
-// 640x480 @ 24fps: sharp on a phone screen, and light enough to hold up on
-// mobile data. WebRTC still adapts down on a weak link.
+// 720p @ 24fps: noticeably sharper than the old 480p capture, and still
+// comfortably inside what the adaptive tier system above can step down from
+// on a weak link -- this only raises the ceiling for a *good* connection.
 function videoConstraints(facing: CameraFacing): MediaTrackConstraints {
-  return { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } };
+  return { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24, max: 30 } };
 }
 
 /** One RTCPeerConnection plus the local mic (and, for a video call, camera)
@@ -113,6 +119,7 @@ export class CallClient {
   private audioSender: RTCRtpSender | null = null;
   private facing: CameraFacing = "user";
   private cameraOn = false;
+  private screenSharing = false;
   private disposed = false;
 
   // --- reconnection ---
@@ -155,6 +162,19 @@ export class CallClient {
 
   get cameraFacing(): CameraFacing {
     return this.facing;
+  }
+
+  get isSharingScreen(): boolean {
+    return this.screenSharing;
+  }
+
+  // Screen sharing needs getDisplayMedia, which a plain Android WebView
+  // doesn't expose (there's no public API for a WebView to hand off to
+  // Android's MediaProjection picker the way a real browser can) -- so the
+  // UI should hide/disable the button entirely rather than let someone tap
+  // it and get a confusing failure.
+  static get canShareScreen(): boolean {
+    return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia && !Capacitor.isNativePlatform();
   }
 
   private ensurePeerConnection(): RTCPeerConnection {
@@ -667,6 +687,65 @@ export class CallClient {
     await sender.replaceTrack(track);
     this.publishLocalStream();
     return this.facing;
+  }
+
+  // Swaps the outgoing video for a captured screen/window/tab, same
+  // replaceTrack approach as switchCamera -- no renegotiation needed, so it
+  // doesn't interrupt the call. The camera track is stopped (not just
+  // disabled) while sharing, same as setCameraEnabled(false), since nothing
+  // needs it live in the meantime.
+  async startScreenShare(): Promise<boolean> {
+    const sender = this.videoSender;
+    const stream = this.localStream;
+    if (!sender || !stream || this.screenSharing || !CallClient.canShareScreen) return false;
+
+    let displayStream: MediaStream;
+    try {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch {
+      return false; // Picker cancelled or denied -- not a call-ending error.
+    }
+    const screenTrack = displayStream.getVideoTracks()[0];
+    if (!screenTrack) return false;
+
+    stream.getVideoTracks().forEach((t) => {
+      t.stop();
+      stream.removeTrack(t);
+    });
+    stream.addTrack(screenTrack);
+    await sender.replaceTrack(screenTrack);
+    this.screenSharing = true;
+    this.cameraOn = true;
+    this.publishLocalStream();
+
+    // The browser's own "Stop sharing" control (or the OS-level screen-share
+    // indicator) ends the track directly, bypassing this class entirely --
+    // without this, that would leave the call sending a dead video track.
+    screenTrack.onended = () => {
+      this.stopScreenShare().catch(() => {});
+    };
+    return true;
+  }
+
+  async stopScreenShare(): Promise<void> {
+    const sender = this.videoSender;
+    const stream = this.localStream;
+    if (!sender || !stream || !this.screenSharing) return;
+    stream.getVideoTracks().forEach((t) => {
+      t.stop();
+      stream.removeTrack(t);
+    });
+    this.screenSharing = false;
+    try {
+      const track = await this.acquireVideoTrack(this.facing);
+      stream.addTrack(track);
+      await sender.replaceTrack(track);
+      this.cameraOn = true;
+    } catch {
+      await sender.replaceTrack(null);
+      this.cameraOn = false;
+    }
+    this.publishLocalStream();
   }
 
   dispose(): void {

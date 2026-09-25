@@ -50,8 +50,14 @@ interface CallOverlayProps {
   // Video was paused automatically to protect the audio (mine / the other person's).
   myVideoPaused: boolean;
   peerVideoPaused: boolean;
+  // Screen sharing needs getDisplayMedia, which the Android app's WebView
+  // can't expose (see CallClient.canShareScreen) -- canShareScreen hides the
+  // button entirely there rather than offering something that can't work.
+  screenSharing: boolean;
+  canShareScreen: boolean;
   onToggleCamera: () => void;
   onSwitchCamera: () => void;
+  onToggleScreenShare: () => void;
   onReact: (emoji: string) => void;
   onAccept: () => void;
   onDecline: () => void;
@@ -161,8 +167,11 @@ export function CallOverlay({
   noAudio,
   myVideoPaused,
   peerVideoPaused,
+  screenSharing,
+  canShareScreen,
   onToggleCamera,
   onSwitchCamera,
+  onToggleScreenShare,
   onReact,
   onAccept,
   onDecline,
@@ -407,6 +416,21 @@ export function CallOverlay({
                 aria-pressed={!cameraOn}
               >
                 <CameraIcon off={!cameraOn} />
+              </button>
+            )}
+            {live && canShareScreen && (
+              <button
+                type="button"
+                className={`call-ctl-btn ${screenSharing ? "on" : ""}`}
+                onClick={onToggleScreenShare}
+                aria-label={screenSharing ? "Stop sharing screen" : "Share screen"}
+                aria-pressed={screenSharing}
+              >
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <rect x="2.5" y="4.5" width="19" height="13" rx="1.8" />
+                  <path d="M9 20.5h6M12 17.5v3" strokeLinecap="round" />
+                  <path d="M12 7v5.5M9.3 9.7 12 7l2.7 2.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
             )}
             <button

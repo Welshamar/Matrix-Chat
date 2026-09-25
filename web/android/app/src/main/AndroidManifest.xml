@@ -33,6 +33,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- Keeps the process alive and unthrottled while a call is active
+             and the app is backgrounded — see CallForegroundService. -->
+        <service
+            android:name=".CallForegroundService"
+            android:foregroundServiceType="microphone|camera"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
@@ -52,4 +59,10 @@
     <!-- Chat notifications (Android 13+ requires this to be requested at
          runtime in addition to being declared here). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Keeps a call alive while the app is backgrounded — see
+         CallForegroundService. Android 14+ requires the specific FGS type
+         permissions in addition to the general one. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 </manifest>

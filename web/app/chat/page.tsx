@@ -49,6 +49,7 @@ import { SignalClient } from "@/lib/signal/signalClient";
 import { CallClient } from "@/lib/callClient";
 import { RingtonePlayer } from "@/lib/ringtone";
 import { setCallSpeaker, startCallAudioRouting, stopCallAudioRouting } from "@/lib/callAudio";
+import { startCallForegroundService, stopCallForegroundService } from "@/lib/callForeground";
 import { playReceivedTone, playSentTone } from "@/lib/messageTone";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
@@ -205,6 +206,7 @@ export default function ChatPage() {
   const [callLocalStream, setCallLocalStream] = useState<MediaStream | null>(null);
   const [callRemoteStream, setCallRemoteStream] = useState<MediaStream | null>(null);
   const [callCameraOn, setCallCameraOn] = useState(false);
+  const [callScreenSharing, setCallScreenSharing] = useState(false);
   const [callPeerCameraOn, setCallPeerCameraOn] = useState(false);
   const [callCanSendVideo, setCallCanSendVideo] = useState(false);
   const [callFacing, setCallFacing] = useState<"user" | "environment">("user");
@@ -1813,6 +1815,7 @@ export default function ChatPage() {
   function resetCallState() {
     callRingtoneRef.current?.stop();
     stopCallAudioRouting();
+    stopCallForegroundService();
     logCallOutcome().catch((err) => console.error("Failed to log call outcome:", err));
     callDirectionRef.current = null;
     callClientRef.current?.dispose();
@@ -1845,6 +1848,7 @@ export default function ChatPage() {
     setCallLocalStream(null);
     setCallRemoteStream(null);
     setCallCameraOn(false);
+    setCallScreenSharing(false);
     setCallPeerCameraOn(false);
     setCallCanSendVideo(false);
     setCallFacing("user");
@@ -1881,7 +1885,17 @@ export default function ChatPage() {
         onRemoteStream: attachRemoteStream,
         onFailure: failCall,
         onConnected: handleCallConnected,
-        onLocalStream: setCallLocalStream,
+        onLocalStream: (stream) => {
+          setCallLocalStream(stream);
+          // Catches screen-share ending itself (the browser's own "Stop
+          // sharing" control, or the OS screen-share bar) as well as the
+          // in-app toggle button -- both funnel through publishLocalStream.
+          const client = callClientRef.current;
+          if (client) {
+            setCallScreenSharing(client.isSharingScreen);
+            setCallCameraOn(client.isCameraOn);
+          }
+        },
         onConnectionChange: (state) => setCallReconnecting(state === "reconnecting"),
         onQuality: ({ weak }) => setCallWeak(weak),
         onNoAudioDetected: () => setCallNoAudio(true),
@@ -1930,6 +1944,7 @@ export default function ChatPage() {
       // it mid-capture, which was cancelling outgoing calls before they
       // even connected.
       await startCallAudioRouting();
+      startCallForegroundService(video).catch(() => {});
       const offer = await client.startAsCaller();
       // The call may have been cancelled locally while we were still
       // waiting on mic permission above — don't resurrect it by inviting
@@ -1964,6 +1979,7 @@ export default function ChatPage() {
     if (!socketRef.current || !callPeer || !callIdRef.current || !pendingOfferRef.current) return;
     callRingtoneRef.current?.stop();
     setCallConnecting(true);
+    startCallForegroundService(callVideoRef.current).catch(() => {});
     const socket = socketRef.current;
     const peerUserId = callPeer.userId;
     const callId = callIdRef.current;
@@ -2053,6 +2069,18 @@ export default function ChatPage() {
     } catch {
       // Keep whatever camera state we had.
     }
+    setCallCameraOn(client.isCameraOn);
+  }
+
+  async function toggleCallScreenShare() {
+    const client = callClientRef.current;
+    if (!client) return;
+    if (client.isSharingScreen) {
+      await client.stopScreenShare();
+    } else {
+      await client.startScreenShare();
+    }
+    setCallScreenSharing(client.isSharingScreen);
     setCallCameraOn(client.isCameraOn);
   }
 
@@ -2867,8 +2895,11 @@ export default function ChatPage() {
           noAudio={callNoAudio}
           myVideoPaused={callMyVideoPaused}
           peerVideoPaused={callPeerVideoPaused}
+          screenSharing={callScreenSharing}
+          canShareScreen={CallClient.canShareScreen}
           onToggleCamera={toggleCallCamera}
           onSwitchCamera={switchCallCamera}
+          onToggleScreenShare={toggleCallScreenShare}
           onReact={sendCallReaction}
           onAccept={handleAcceptCall}
           onDecline={handleDeclineCall}
