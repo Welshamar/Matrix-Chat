@@ -1,6 +1,7 @@
 import type { Socket } from "socket.io-client";
 import { Capacitor } from "@capacitor/core";
 import { ICE_SERVERS } from "./webrtc";
+import { startNativeScreenShare } from "./nativeScreenShare";
 
 export interface CallClientHandlers {
   onRemoteStream: (stream: MediaStream) => void;
@@ -120,6 +121,7 @@ export class CallClient {
   private facing: CameraFacing = "user";
   private cameraOn = false;
   private screenSharing = false;
+  private nativeScreenShareStop: (() => void) | null = null;
   private disposed = false;
 
   // --- reconnection ---
@@ -168,13 +170,13 @@ export class CallClient {
     return this.screenSharing;
   }
 
-  // Screen sharing needs getDisplayMedia, which a plain Android WebView
-  // doesn't expose (there's no public API for a WebView to hand off to
-  // Android's MediaProjection picker the way a real browser can) -- so the
-  // UI should hide/disable the button entirely rather than let someone tap
-  // it and get a confusing failure.
+  // Desktop web uses the standard getDisplayMedia() picker; the native
+  // Android shell has no such browser API, so it's bridged natively instead
+  // (see nativeScreenShare.ts) -- both are always available where relevant,
+  // so this only needs to rule out a browser that has neither.
   static get canShareScreen(): boolean {
-    return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia && !Capacitor.isNativePlatform();
+    if (Capacitor.isNativePlatform()) return true;
+    return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;
   }
 
   private ensurePeerConnection(): RTCPeerConnection {
@@ -699,14 +701,26 @@ export class CallClient {
     const stream = this.localStream;
     if (!sender || !stream || this.screenSharing || !CallClient.canShareScreen) return false;
 
-    let displayStream: MediaStream;
-    try {
-      displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-    } catch {
-      return false; // Picker cancelled or denied -- not a call-ending error.
+    let screenTrack: MediaStreamTrack | undefined;
+    let nativeStop: (() => void) | null = null;
+    if (Capacitor.isNativePlatform()) {
+      const handle = await startNativeScreenShare();
+      if (!handle) return false; // Consent denied, or the plugin isn't available.
+      screenTrack = handle.stream.getVideoTracks()[0];
+      nativeStop = handle.stop;
+    } else {
+      let displayStream: MediaStream;
+      try {
+        displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      } catch {
+        return false; // Picker cancelled or denied -- not a call-ending error.
+      }
+      screenTrack = displayStream.getVideoTracks()[0];
     }
-    const screenTrack = displayStream.getVideoTracks()[0];
-    if (!screenTrack) return false;
+    if (!screenTrack) {
+      nativeStop?.();
+      return false;
+    }
 
     stream.getVideoTracks().forEach((t) => {
       t.stop();
@@ -716,11 +730,13 @@ export class CallClient {
     await sender.replaceTrack(screenTrack);
     this.screenSharing = true;
     this.cameraOn = true;
+    this.nativeScreenShareStop = nativeStop;
     this.publishLocalStream();
 
-    // The browser's own "Stop sharing" control (or the OS-level screen-share
-    // indicator) ends the track directly, bypassing this class entirely --
-    // without this, that would leave the call sending a dead video track.
+    // The browser's own "Stop sharing" control (or, natively, the system
+    // screen-capture indicator / ScreenCapturePlugin's "stopped" event) ends
+    // the track directly, bypassing this class entirely -- without this,
+    // that would leave the call sending a dead video track.
     screenTrack.onended = () => {
       this.stopScreenShare().catch(() => {});
     };
@@ -736,6 +752,8 @@ export class CallClient {
       stream.removeTrack(t);
     });
     this.screenSharing = false;
+    this.nativeScreenShareStop?.();
+    this.nativeScreenShareStop = null;
     try {
       const track = await this.acquireVideoTrack(this.facing);
       stream.addTrack(track);
@@ -756,6 +774,13 @@ export class CallClient {
     if (this.qualityTimer) clearInterval(this.qualityTimer);
     this.disconnectTimer = this.giveUpTimer = this.restartTimer = null;
     this.qualityTimer = null;
+    // Stopping the tracks below fires the screen-share track's onended
+    // asynchronously, by which point localStream/videoSender are already
+    // null -- stopScreenShare() would then no-op and never tell the native
+    // side to tear down, leaving its foreground-service notification
+    // stuck. Stop it directly, synchronously, first.
+    this.nativeScreenShareStop?.();
+    this.nativeScreenShareStop = null;
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.pc?.close();
     this.pc = null;

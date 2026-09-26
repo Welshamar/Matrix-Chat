@@ -40,6 +40,14 @@
             android:name=".CallForegroundService"
             android:foregroundServiceType="microphone|camera"
             android:exported="false" />
+
+        <!-- Bridges native screen capture into the WebView call — see
+             ScreenCaptureService. Android requires the mediaProjection
+             type to be declared here before a MediaProjection can be used. -->
+        <service
+            android:name=".ScreenCaptureService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
@@ -65,4 +73,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- Native screen sharing (see ScreenCaptureService) — Android's own
+         screen-capture consent dialog is requested at runtime via
+         MediaProjectionManager; this just permits the foreground service
+         that Android requires while a projection is active. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 </manifest>
