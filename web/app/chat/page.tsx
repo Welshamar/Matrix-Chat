@@ -2342,14 +2342,17 @@ export default function ChatPage() {
                   )}
                 </span>
                 <span className="conversation-meta-col">
-                  <button
-                    className={`star-btn ${t.favourite ? "starred" : ""}`}
-                    onClick={(e) => handleToggleFavourite(e, t)}
-                    aria-label="Toggle favourite"
-                  >
-                    {t.favourite ? "★" : "☆"}
-                  </button>
-                  {!!t.unreadCount && <span className="unread-badge">{t.unreadCount}</span>}
+                  {t.lastTimestamp && <span className="conversation-time">{formatChatListTimestamp(t.lastTimestamp)}</span>}
+                  <span className="conversation-meta-row">
+                    <button
+                      className={`star-btn ${t.favourite ? "starred" : ""}`}
+                      onClick={(e) => handleToggleFavourite(e, t)}
+                      aria-label="Toggle favourite"
+                    >
+                      {t.favourite ? "★" : "☆"}
+                    </button>
+                    {!!t.unreadCount && <span className="unread-badge">{t.unreadCount}</span>}
+                  </span>
                 </span>
                 {longPressKey === t.key && (
                   <>
@@ -2917,6 +2920,22 @@ export default function ChatPage() {
       {showExitPrompt && <div className="exit-prompt-toast">Press back again to exit</div>}
     </div>
   );
+}
+
+// WhatsApp-style sidebar timestamp: a clock time only makes sense for
+// "today" -- anything older reads far more naturally as a day name (this
+// week) or a date (further back) than a time that's no longer meaningful.
+function formatChatListTimestamp(iso: string): string {
+  const then = new Date(iso);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfThen = new Date(then.getFullYear(), then.getMonth(), then.getDate());
+  const dayDiff = Math.round((startOfToday.getTime() - startOfThen.getTime()) / 86_400_000);
+
+  if (dayDiff <= 0) return then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff < 7) return then.toLocaleDateString([], { weekday: "long" });
+  return then.toLocaleDateString([], { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 
 // WhatsApp-style relative "last seen" phrasing: recent times read as a

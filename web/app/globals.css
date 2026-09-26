@@ -573,6 +573,18 @@ input {
   flex-shrink: 0;
 }
 
+.conversation-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.conversation-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .star-btn {
   background: none;
   border: none;
