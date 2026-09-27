@@ -228,6 +228,20 @@ export default function ChatPage() {
   const activeGroupRef = useRef<LocalGroup | null>(null);
   const groupsRef = useRef<LocalGroup[]>([]);
   const conversationsRef = useRef<Conversation[]>([]);
+  // Resolves once init()'s group/conversation roster sync (below) has run at
+  // least once. A notification tap that cold-launches the app fires in a
+  // separate effect with no ordering guarantee against that sync -- without
+  // this, it could race it and wrongly treat an already-known thread as new,
+  // taking a slow HTTP round trip (ensureConversation/ensureGroup) to open
+  // it instead of finding it already synced a moment later.
+  const initialSyncRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+  if (!initialSyncRef.current) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    initialSyncRef.current = { promise, resolve };
+  }
   const initRan = useRef(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -547,12 +561,26 @@ export default function ChatPage() {
     // last. senderId/groupId ride along as a plain data payload on the
     // push (see push.ts) — never message content, just routing.
     async function openThreadFor(target: { senderId: string; groupId?: string }) {
+      // Give the login-time roster sync a moment to finish (it usually
+      // already has, but a notification tap that cold-launches the app has
+      // no ordering guarantee against it) so an already-known thread is
+      // recognized as such instead of taking the slow ensureConversation/
+      // ensureGroup HTTP round trip for no reason. Time-boxed so a stuck
+      // sync never blocks opening the thread at all.
+      await Promise.race([initialSyncRef.current!.promise, new Promise((resolve) => setTimeout(resolve, 3000))]);
+
       if (target.groupId) {
-        const known = groupsRef.current.find((g) => g.groupId === target.groupId);
+        // Read straight from IndexedDB rather than groupsRef: the sync
+        // above resolves right after its IndexedDB write, before the
+        // state->ref-sync effect has necessarily run, so the ref can still
+        // be one render behind at exactly this moment.
+        const localGroups = await getGroups(session!.userId);
+        const known = localGroups.find((g) => g.groupId === target.groupId);
         const group = known ?? (await ensureGroup(session!.userId, session!.token, target.groupId, "", new Date().toISOString()));
         await handleSelectGroup(group);
       } else {
-        const known = conversationsRef.current.find((c) => c.peerId === target.senderId);
+        const localConversations = await getConversations(session!.userId);
+        const known = localConversations.find((c) => c.peerId === target.senderId);
         const conv = known ?? (await ensureConversation(session!.userId, session!.token, target.senderId, "", new Date().toISOString()));
         await handleSelectConversation(conv);
       }
@@ -935,6 +963,7 @@ export default function ChatPage() {
       } catch (err) {
         console.error("Failed to sync conversation roster:", err);
       }
+      initialSyncRef.current!.resolve();
 
       // Catch up on anything sent while we were offline. Each message is
       // handled independently — one bad/undecryptable message (e.g. a key

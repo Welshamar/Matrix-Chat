@@ -42,6 +42,23 @@ export function isUserVisible(userId: string): boolean {
   return false;
 }
 
+// signal:message now relays and acks a send before its own DB write settles
+// (see below) so delivery doesn't wait on a round trip that isn't needed for
+// it -- which opens a narrow race where an unusually fast recipient's
+// receipt or view-once "viewed" event reaches the row's update before the
+// write has landed. A record-not-found here almost always means exactly
+// that (a send that got this far always finished its relay first), not a
+// genuinely missing message, so it's worth a brief retry before failing.
+async function updateMessageWithRetry<T>(update: () => Promise<T>, attempt = 0): Promise<T> {
+  try {
+    return await update();
+  } catch (err) {
+    if (attempt >= 3) throw err;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return updateMessageWithRetry(update, attempt + 1);
+  }
+}
+
 function isValidMessagePayload(p: unknown): p is SignalMessagePayload {
   const m = p as Partial<SignalMessagePayload> | null;
   return !!(
@@ -142,30 +159,52 @@ export function registerSignalGateway(io: Server): void {
             }
           }
 
-          // `payload.ciphertext` is an opaque Double Ratchet blob: stored
-          // and relayed byte-for-byte, never parsed or decrypted here.
-          const message = await prisma.message.create({
-            data: {
-              senderId: userId,
-              recipientId: payload.recipientId,
-              ciphertext: payload.ciphertext,
-              signalMessageType: payload.signalMessageType,
-              viewOnce: payload.viewOnce ?? false,
-              kind: payload.kind ?? "TEXT",
-              groupId,
-            },
-          });
+          // Generated here (rather than left to Postgres's default) so the
+          // relay and the sender's ack don't have to wait on the DB write
+          // below to find out what it is -- every message used to pay a
+          // full round trip to Neon on the critical path of both, which is
+          // where "delayed message delivery" reports traced back to.
+          const messageId = randomUUID();
+          const timestamp = new Date();
 
+          // `payload.ciphertext` is an opaque Double Ratchet blob: relayed
+          // (and, below, stored) byte-for-byte, never parsed or decrypted
+          // here.
           io.to(userRoom(payload.recipientId)).emit("signal:message", {
-            id: message.id,
-            senderId: message.senderId,
-            ciphertext: message.ciphertext,
-            signalMessageType: message.signalMessageType,
-            viewOnce: message.viewOnce,
-            kind: message.kind,
-            groupId: message.groupId,
-            timestamp: message.timestamp,
+            id: messageId,
+            senderId: userId,
+            ciphertext: payload.ciphertext,
+            signalMessageType: payload.signalMessageType,
+            viewOnce: payload.viewOnce ?? false,
+            kind: payload.kind ?? "TEXT",
+            groupId,
+            timestamp: timestamp.toISOString(),
           });
+          ack?.({ ok: true, messageId, clientMessageId: payload.clientMessageId });
+
+          // Persisted after the live relay+ack above, not before: the row
+          // only matters for the recipient's offline inbox catch-up (see
+          // fetchInbox) if they reconnect having missed the live emit, not
+          // for delivery itself, so it no longer gates either. A failure
+          // here is logged, never surfaced back through the ack that's
+          // already gone out. signal:receipt / signal:viewed below retry
+          // briefly on "not found" to cover a receipt winning the race
+          // against this write on an unusually fast round trip.
+          prisma.message
+            .create({
+              data: {
+                id: messageId,
+                senderId: userId,
+                recipientId: payload.recipientId,
+                ciphertext: payload.ciphertext,
+                signalMessageType: payload.signalMessageType,
+                viewOnce: payload.viewOnce ?? false,
+                kind: payload.kind ?? "TEXT",
+                groupId,
+                timestamp,
+              },
+            })
+            .catch((err) => console.error(`Failed to persist message ${messageId} after live relay:`, err));
 
           // The recipient either has no live socket, or has one but isn't
           // actually looking at it right now (backgrounded app, unfocused
@@ -193,8 +232,6 @@ export function registerSignalGateway(io: Server): void {
               })
               .catch((err) => console.error("Failed to send push notification:", err));
           }
-
-          ack?.({ ok: true, messageId: message.id, clientMessageId: payload.clientMessageId });
         } catch {
           ack?.({ ok: false, error: "Failed to relay message." });
         }
@@ -215,10 +252,12 @@ export function registerSignalGateway(io: Server): void {
           // holds the message locally, and the inbox only ever serves rows
           // still in SENT. Dropping it here (as view-once already does) keeps
           // the database from filling up with delivered photos and files.
-          const message = await prisma.message.update({
-            where: { id: payload.messageId, recipientId: userId },
-            data: { status: payload.status, ciphertext: null },
-          });
+          const message = await updateMessageWithRetry(() =>
+            prisma.message.update({
+              where: { id: payload.messageId, recipientId: userId },
+              data: { status: payload.status, ciphertext: null },
+            })
+          );
 
           io.to(userRoom(message.senderId)).emit("signal:receipt", {
             messageId: message.id,
@@ -245,10 +284,12 @@ export function registerSignalGateway(io: Server): void {
         }
 
         try {
-          const message = await prisma.message.update({
-            where: { id: payload.messageId },
-            data: { ciphertext: null, viewedAt: new Date(), status: "READ" },
-          });
+          const message = await updateMessageWithRetry(() =>
+            prisma.message.update({
+              where: { id: payload.messageId },
+              data: { ciphertext: null, viewedAt: new Date(), status: "READ" },
+            })
+          );
 
           io.to(userRoom(message.senderId)).emit("signal:viewed", {
             messageId: message.id,
