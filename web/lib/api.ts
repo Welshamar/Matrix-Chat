@@ -128,6 +128,21 @@ export function fetchInbox(token: string): Promise<InboxEnvelope[]> {
   return authedRequest("/api/messages/inbox", token, { method: "GET" });
 }
 
+export interface ConversationPeerDTO {
+  peerId: string;
+  peerUsername: string;
+  peerAvatarUrl: string | null;
+  lastMessageAt: string;
+}
+
+// Recovers the 1:1 chat list itself (not message history, which the server
+// never retains) on a fresh install/new device -- see listConversationPeers
+// in messages.controller.ts. The group equivalent of this already exists
+// via listGroups below.
+export function listConversationPeers(token: string): Promise<ConversationPeerDTO[]> {
+  return authedRequest("/api/messages/conversations", token, { method: "GET" });
+}
+
 export type GroupRole = "ADMIN" | "MEMBER";
 
 export interface GroupMemberDTO {

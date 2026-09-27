@@ -15,6 +15,7 @@ import {
   fetchPresence,
   fetchPresenceBatch,
   getGroup,
+  listConversationPeers,
   listGroups,
   lookupUsername,
   muteThread as muteThreadApi,
@@ -895,6 +896,44 @@ export default function ChatPage() {
         }
       } catch (err) {
         console.error("Failed to sync groups:", err);
+      }
+
+      // Sync our 1:1 chat list from the server -- a fresh install, an app
+      // update, or a new device all start with an empty local conversation
+      // list (conversations are purely client-side; see localDb.ts), which
+      // otherwise means re-searching every username by hand. This recovers
+      // the roster of who to show, not their message history: the server
+      // never retains plaintext, so a recovered conversation legitimately
+      // starts with no messages, same as it would after "Clear chat".
+      try {
+        const serverPeers = await listConversationPeers(session.token);
+        const localConversations = await getConversations(session.userId);
+        const localByPeer = new Map(localConversations.map((c) => [c.peerId, c]));
+        for (const peer of serverPeers) {
+          const existing = localByPeer.get(peer.peerId);
+          if (existing) {
+            // Already known to this device -- refresh username/avatar in
+            // case they changed, but never touch lastMessage/lastTimestamp:
+            // this device's own history is a better source of truth for
+            // those than a server-side "last exchanged" timestamp with no
+            // content to show alongside it.
+            await upsertConversation(session.userId, {
+              peerId: peer.peerId,
+              peerUsername: peer.peerUsername,
+              peerAvatarUrl: peer.peerAvatarUrl,
+            });
+          } else {
+            await upsertConversation(session.userId, {
+              peerId: peer.peerId,
+              peerUsername: peer.peerUsername,
+              peerAvatarUrl: peer.peerAvatarUrl,
+              lastTimestamp: peer.lastMessageAt,
+            });
+          }
+        }
+        await refreshConversations(session.userId);
+      } catch (err) {
+        console.error("Failed to sync conversation roster:", err);
       }
 
       // Catch up on anything sent while we were offline. Each message is
