@@ -71,6 +71,20 @@ public class ScreenCaptureService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        try {
+            return startCapture(intent);
+        } catch (Exception e) {
+            // Never allowed to crash the app -- screen sharing failing to
+            // start should just mean no screen share, exactly like a denied
+            // consent dialog, never a broken call.
+            android.util.Log.e("ScreenCaptureService", "Failed to start screen capture", e);
+            if (frameListener != null) frameListener.onStopped();
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+    }
+
+    private int startCapture(Intent intent) {
         if (intent == null) {
             stopSelf();
             return START_NOT_STICKY;

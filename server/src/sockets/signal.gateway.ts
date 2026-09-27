@@ -227,6 +227,7 @@ export function registerSignalGateway(io: Server): void {
                   return sendPushNotification(recipient.fcmToken, senderUsername, "Sent you a message", {
                     senderId: userId,
                     groupId,
+                    messageId,
                   });
                 }
               })

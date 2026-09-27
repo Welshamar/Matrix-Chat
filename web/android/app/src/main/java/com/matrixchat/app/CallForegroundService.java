@@ -29,7 +29,19 @@ public class CallForegroundService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         boolean video = intent != null && intent.getBooleanExtra(EXTRA_VIDEO, false);
-        startForegroundCompat(video);
+        try {
+            startForegroundCompat(video);
+        } catch (Exception e) {
+            // Must never crash the caller: on Android 14+ this throws if the
+            // app doesn't currently hold RECORD_AUDIO/CAMERA (the JS side
+            // only calls start() after getUserMedia has already confirmed
+            // it does, but this is the last line of defense against any
+            // other OEM/permission-state surprise). Worst case the call
+            // proceeds without background survival, which is what already
+            // happened before this feature existed -- never worse than that.
+            android.util.Log.e("CallForegroundService", "Failed to start foreground notification", e);
+            stopSelf();
+        }
         return START_NOT_STICKY;
     }
 

@@ -32,6 +32,10 @@ function ensureInitialized(): boolean {
 export interface PushNotificationTarget {
   senderId: string;
   groupId?: string;
+  // The chat message this notification is about, so tapping it can jump
+  // straight to (and highlight) that specific bubble instead of just
+  // opening the thread and leaving the person to find it themselves.
+  messageId?: string;
 }
 
 /** Fire-and-forget: pushes are a best-effort convenience notification, not
@@ -51,13 +55,20 @@ export async function sendPushNotification(fcmToken: string, title: string, body
   }
 
   try {
-    const messageId = await getMessaging().send({
+    // Renamed locally to avoid confusion with target.messageId (the chat
+    // message this push is about) -- this is FCM's own id for the push
+    // itself, unrelated to that.
+    const fcmMessageId = await getMessaging().send({
       token: fcmToken,
       notification: { title, body },
-      data: target.groupId ? { senderId: target.senderId, groupId: target.groupId } : { senderId: target.senderId },
+      data: {
+        senderId: target.senderId,
+        ...(target.groupId ? { groupId: target.groupId } : {}),
+        ...(target.messageId ? { chatMessageId: target.messageId } : {}),
+      },
       android: { priority: "high", notification: { channelId: ANDROID_CHANNEL_ID, sound: "default" } },
     });
-    console.log("Push notification sent:", messageId);
+    console.log("Push notification sent:", fcmMessageId);
   } catch (err) {
     console.error("Failed to send push notification:", err);
   }

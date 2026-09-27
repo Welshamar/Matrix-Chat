@@ -177,6 +177,10 @@ export default function ChatPage() {
   const [chatSearchOpen, setChatSearchOpen] = useState(false);
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [chatSearchIndex, setChatSearchIndex] = useState(0);
+  // The message a notification tap should jump to and briefly highlight
+  // (reuses the same "search-match-active" ring as in-chat search) — set
+  // once the target thread has finished opening, then auto-cleared.
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
@@ -560,7 +564,7 @@ export default function ChatPage() {
     // instead of leaving the user on whatever thread happened to be open
     // last. senderId/groupId ride along as a plain data payload on the
     // push (see push.ts) — never message content, just routing.
-    async function openThreadFor(target: { senderId: string; groupId?: string }) {
+    async function openThreadFor(target: { senderId: string; groupId?: string; messageId?: string }) {
       // Give the login-time roster sync a moment to finish (it usually
       // already has, but a notification tap that cold-launches the app has
       // no ordering guarantee against it) so an already-known thread is
@@ -583,6 +587,18 @@ export default function ChatPage() {
         const known = localConversations.find((c) => c.peerId === target.senderId);
         const conv = known ?? (await ensureConversation(session!.userId, session!.token, target.senderId, "", new Date().toISOString()));
         await handleSelectConversation(conv);
+      }
+
+      if (target.messageId) {
+        const id = target.messageId;
+        // The thread's messages render on the next tick (handleSelect*
+        // above just kicked off the state update) — wait a beat so the
+        // bubble actually exists in the DOM before scrolling to it.
+        setTimeout(() => {
+          document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightedMessageId(id);
+          setTimeout(() => setHighlightedMessageId((cur) => (cur === id ? null : cur)), 2500);
+        }, 300);
       }
     }
 
@@ -2012,12 +2028,17 @@ export default function ChatPage() {
       // it mid-capture, which was cancelling outgoing calls before they
       // even connected.
       await startCallAudioRouting();
-      startCallForegroundService(video).catch(() => {});
       const offer = await client.startAsCaller();
       // The call may have been cancelled locally while we were still
       // waiting on mic permission above — don't resurrect it by inviting
       // the other side to a call we've already torn down.
       if (callIdRef.current !== callId) return;
+      // Only now, after startAsCaller's getUserMedia has actually resolved,
+      // is the mic (and, for video, the camera) permission definitely held.
+      // Starting this any earlier crashes/fails outright on Android 14+:
+      // starting a foreground service typed microphone/camera while the
+      // app doesn't yet hold that permission throws instead of prompting.
+      startCallForegroundService(video).catch(() => {});
       syncCameraState(client);
       const ack = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
         socket.emit("call:invite", { toUserId: peer.peerId, callId, sdp: offer, video }, resolve);
@@ -2047,7 +2068,6 @@ export default function ChatPage() {
     if (!socketRef.current || !callPeer || !callIdRef.current || !pendingOfferRef.current) return;
     callRingtoneRef.current?.stop();
     setCallConnecting(true);
-    startCallForegroundService(callVideoRef.current).catch(() => {});
     const socket = socketRef.current;
     const peerUserId = callPeer.userId;
     const callId = callIdRef.current;
@@ -2073,6 +2093,11 @@ export default function ChatPage() {
       await startCallAudioRouting();
       const answer = await client.acceptAsCallee(offer);
       pendingOfferRef.current = null;
+      // Only now, after acceptAsCallee's getUserMedia has actually resolved,
+      // is the mic (and, for video, the camera) permission definitely held
+      // — see the matching comment in startCall for why this can't run any
+      // earlier on Android 14+.
+      startCallForegroundService(callVideoRef.current).catch(() => {});
       syncCameraState(client);
       socket.emit("call:answer", { toUserId: peerUserId, callId, sdp: answer });
       // No usable camera on this side: take the call anyway and let the
@@ -2730,7 +2755,7 @@ export default function ChatPage() {
                     selected={selectedMessageIds.has(m.id)}
                     onToggleSelect={handleToggleMessageSelected}
                     highlightQuery={chatSearchOpen ? chatSearchQuery : undefined}
-                    isActiveMatch={chatSearchOpen && chatSearchMatches[chatSearchIndex] === m.id}
+                    isActiveMatch={(chatSearchOpen && chatSearchMatches[chatSearchIndex] === m.id) || m.id === highlightedMessageId}
                   />
                 );
               })}

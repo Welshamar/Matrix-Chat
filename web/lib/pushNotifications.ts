@@ -20,6 +20,10 @@ export const MESSAGE_CHANNEL_ID = "messages_v2";
 export interface NotificationTapTarget {
   senderId: string;
   groupId?: string;
+  // The chat message this notification was about (see push.ts's
+  // chatMessageId), so the tap handler can jump straight to and highlight
+  // that specific bubble instead of just opening the thread.
+  messageId?: string;
 }
 
 // No-ops entirely outside the native Android shell — a browser tab has no
@@ -68,9 +72,9 @@ export async function registerForPushNotifications(
     // listening. Without this, opening the app from a notification just
     // shows whatever thread was last open instead of the new message.
     await PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
-      const data = action.notification?.data as { senderId?: string; groupId?: string } | undefined;
+      const data = action.notification?.data as { senderId?: string; groupId?: string; chatMessageId?: string } | undefined;
       if (data?.senderId) {
-        onNotificationTap({ senderId: data.senderId, groupId: data.groupId || undefined });
+        onNotificationTap({ senderId: data.senderId, groupId: data.groupId || undefined, messageId: data.chatMessageId || undefined });
       }
     });
 
