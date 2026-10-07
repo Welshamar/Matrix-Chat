@@ -238,6 +238,9 @@ export default function ChatPage() {
   // this, it could race it and wrongly treat an already-known thread as new,
   // taking a slow HTTP round trip (ensureConversation/ensureGroup) to open
   // it instead of finding it already synced a moment later.
+  // Re-runnable offline catch-up (see catchUpInbox in the init effect), kept
+  // in a ref so the foreground-resume handler can trigger it too.
+  const catchUpInboxRef = useRef<(() => Promise<void>) | null>(null);
   const initialSyncRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
   if (!initialSyncRef.current) {
     let resolve!: () => void;
@@ -638,10 +641,20 @@ export default function ChatPage() {
       if (socket && !socket.connected) socket.connect();
     }
 
+    // A socket that looks connected can still be a zombie after the app was
+    // frozen in the background (it only notices at the next ping timeout),
+    // and anything relayed to it in that window was never received -- so
+    // returning to the foreground always re-checks the server's inbox
+    // rather than trusting the socket state.
+    function resumed() {
+      reconnectIfNeeded();
+      catchUpInboxRef.current?.().catch((err) => console.error("Inbox catch-up on resume failed:", err));
+    }
+
     function reportVisibility() {
       const socket = socketRef.current;
       if (socket) sendVisibility(socket, document.visibilityState === "visible");
-      if (document.visibilityState === "visible") reconnectIfNeeded();
+      if (document.visibilityState === "visible") resumed();
     }
 
     document.addEventListener("visibilitychange", reportVisibility);
@@ -649,7 +662,7 @@ export default function ChatPage() {
       ? CapacitorApp.addListener("appStateChange", ({ isActive }) => {
           const socket = socketRef.current;
           if (socket) sendVisibility(socket, isActive);
-          if (isActive) reconnectIfNeeded();
+          if (isActive) resumed();
         })
       : null;
 
@@ -681,8 +694,20 @@ export default function ChatPage() {
       const socket = connectSignalSocket(session.token);
       socketRef.current = socket;
 
+      // Ids already handled this session, whether they arrived live or via
+      // the inbox catch-up -- the two can overlap (a message relayed live
+      // whose DELIVERED receipt hasn't landed yet is still in the inbox), and
+      // decrypting the same ciphertext twice just fails noisily.
+      const seenMessageIds = new Set<string>();
+      let inboxReady = false;
+
       socket.on("connect", () => {
         setConnected(true);
+        // A *re*connect means the socket was gone for a while, and anything
+        // relayed in that gap only exists in the server's inbox (the live
+        // emit went to nobody). The very first connect is covered by init's
+        // own catch-up below.
+        if (inboxReady) catchUpInboxRef.current?.().catch((err) => console.error("Inbox catch-up on reconnect failed:", err));
         // The server defaults a fresh socket to "visible" anyway, but a
         // reconnect can happen while backgrounded (e.g. the socket dropped
         // and came back while the app was still in the background) — make
@@ -706,6 +731,11 @@ export default function ChatPage() {
       });
 
       socket.on("signal:message", async (msg: InboundSignalMessage) => {
+        if (seenMessageIds.has(msg.id)) {
+          await sendReceipt(socket, msg.id, "DELIVERED");
+          return;
+        }
+        seenMessageIds.add(msg.id);
         try {
           const rawPlaintext = await client.decryptMessage(msg.senderId, {
             ciphertext: msg.ciphertext,
@@ -989,70 +1019,122 @@ export default function ChatPage() {
       // leave the already-rendered local cache alone rather than bounce
       // the whole page back to a full-screen error (see the effect above
       // that paints local data before any of this network work runs).
-      let pending: Awaited<ReturnType<typeof fetchInbox>> = [];
-      try {
-        pending = await fetchInbox(session.token);
-      } catch (err) {
-        console.error("Failed to fetch inbox:", err);
-      }
-      for (const msg of pending) {
-        try {
-          const rawPlaintext = await client.decryptMessage(msg.senderId, {
-            ciphertext: msg.ciphertext,
-            signalMessageType: msg.signalMessageType,
-          });
-          const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
-          if (msg.groupId) {
-            const group = await ensureGroup(
-              session.userId,
-              session.token,
-              msg.groupId,
-              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
-              msg.timestamp
-            );
-            const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
-            await appendMessage(session.userId, groupThreadKey(msg.groupId), {
-              id: msg.id,
-              direction: "in",
-              body: plaintext,
-              timestamp: msg.timestamp,
-              status: "DELIVERED",
-              viewOnce: msg.viewOnce,
-              kind: msg.kind,
-              senderId: msg.senderId,
-              senderUsername,
-              replyTo,
-              file,
-            });
-            await incrementGroupUnread(session.userId, msg.groupId);
-          } else {
-            await ensureConversation(
-              session.userId,
-              session.token,
-              msg.senderId,
-              summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
-              msg.timestamp
-            );
-            await appendMessage(session.userId, msg.senderId, {
-              id: msg.id,
-              direction: "in",
-              body: plaintext,
-              timestamp: msg.timestamp,
-              status: "DELIVERED",
-              viewOnce: msg.viewOnce,
-              kind: msg.kind,
-              replyTo,
-              file,
-            });
-            await incrementUnread(session.userId, msg.senderId);
-          }
-        } catch (err) {
-          console.error(`Failed to process inbox message ${msg.id}, skipping:`, err);
+      let inboxSyncRunning = false;
+      let inboxSyncQueued = false;
+      // Safe to call at any time and from several triggers at once: overlapping
+      // calls collapse into one follow-up pass instead of racing each other.
+      const catchUpInbox = async () => {
+        if (inboxSyncRunning) {
+          inboxSyncQueued = true;
+          return;
         }
-        // Ack regardless of decrypt success so an undecryptable message
-        // doesn't keep re-appearing in the inbox on every future login.
-        await sendReceipt(socket, msg.id, "DELIVERED");
-      }
+        inboxSyncRunning = true;
+        try {
+          do {
+            inboxSyncQueued = false;
+            let pending: Awaited<ReturnType<typeof fetchInbox>> = [];
+            try {
+              pending = await fetchInbox(session.token);
+            } catch (err) {
+              console.error("Failed to fetch inbox:", err);
+              return;
+            }
+            for (const msg of pending) {
+              if (!seenMessageIds.has(msg.id)) {
+                seenMessageIds.add(msg.id);
+                try {
+                  const rawPlaintext = await client.decryptMessage(msg.senderId, {
+                    ciphertext: msg.ciphertext,
+                    signalMessageType: msg.signalMessageType,
+                  });
+                  const { text: plaintext, replyTo, file } = decodeEnvelope(rawPlaintext);
+                  if (msg.groupId) {
+                    const group = await ensureGroup(
+                      session.userId,
+                      session.token,
+                      msg.groupId,
+                      summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
+                      msg.timestamp
+                    );
+                    const senderUsername = group.members.find((m) => m.userId === msg.senderId)?.username ?? "Unknown";
+                    await appendMessage(session.userId, groupThreadKey(msg.groupId), {
+                      id: msg.id,
+                      direction: "in",
+                      body: plaintext,
+                      timestamp: msg.timestamp,
+                      status: "DELIVERED",
+                      viewOnce: msg.viewOnce,
+                      kind: msg.kind,
+                      senderId: msg.senderId,
+                      senderUsername,
+                      replyTo,
+                      file,
+                    });
+                    if (activeGroupRef.current?.groupId === msg.groupId) {
+                      setMessages(await getMessages(session.userId, groupThreadKey(msg.groupId)));
+                      void sendReceipt(socket, msg.id, "READ");
+                    } else {
+                      await incrementGroupUnread(session.userId, msg.groupId);
+                    }
+                  } else {
+                    await ensureConversation(
+                      session.userId,
+                      session.token,
+                      msg.senderId,
+                      summarize(msg.kind, msg.viewOnce, plaintext, file?.name),
+                      msg.timestamp
+                    );
+                    await appendMessage(session.userId, msg.senderId, {
+                      id: msg.id,
+                      direction: "in",
+                      body: plaintext,
+                      timestamp: msg.timestamp,
+                      status: "DELIVERED",
+                      viewOnce: msg.viewOnce,
+                      kind: msg.kind,
+                      replyTo,
+                      file,
+                    });
+                    if (activePeerRef.current?.peerId === msg.senderId) {
+                      setMessages(await getMessages(session.userId, msg.senderId));
+                      void sendReceipt(socket, msg.id, "READ");
+                    } else {
+                      await incrementUnread(session.userId, msg.senderId);
+                    }
+                  }
+                } catch (err) {
+                  console.error(`Failed to process inbox message ${msg.id}, skipping:`, err);
+                }
+              }
+              // Ack regardless of decrypt success so an undecryptable message
+              // doesn't keep re-appearing in the inbox on every future login.
+              // Deliberately not awaited here (nor the READ ack above): sendReceipt
+              // has no timeout, so if the socket drops mid-pass the ack never
+              // resolves and this guard would wedge shut for good. socket.io
+              // buffers the emit until reconnect, and a message re-fetched
+              // before its ack lands is skipped via seenMessageIds.
+              void sendReceipt(socket, msg.id, "DELIVERED");
+            }
+            if (pending.length > 0) {
+              await refreshConversations(session.userId);
+              await refreshGroups(session.userId);
+            }
+          } while (inboxSyncQueued);
+        } finally {
+          inboxSyncRunning = false;
+        }
+      };
+      catchUpInboxRef.current = catchUpInbox;
+
+      // Catch up on anything sent while we were offline. Each message is
+      // handled independently -- one bad/undecryptable message (e.g. a key
+      // already consumed by an earlier interrupted attempt) must not take
+      // down the rest of the batch or block startup, and a failed fetch must
+      // not be fatal either (offline, this just leaves the already-rendered
+      // local cache alone -- see the effect above that paints local data
+      // before any of this network work runs).
+      await catchUpInbox();
+      inboxReady = true;
 
       await refreshConversations(session.userId);
       await refreshGroups(session.userId);

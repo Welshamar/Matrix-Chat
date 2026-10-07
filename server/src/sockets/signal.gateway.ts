@@ -22,6 +22,15 @@ const onlineSockets = new Map<string, Set<string>>();
 // until a socket says otherwise (see isUserVisible).
 const socketVisibility = new Map<string, boolean>();
 
+// messageId -> timer for "relayed to a socket that looks alive but hasn't
+// acknowledged it yet". A frozen/backgrounded phone keeps a zombie socket for
+// up to a ping timeout (~45s), during which it counts as online+visible, so
+// the instant push is skipped and the live emit goes nowhere. If the
+// recipient's DELIVERED receipt doesn't arrive quickly, the push goes out
+// anyway (cleared in signal:receipt).
+const DELIVERY_ACK_GRACE_MS = 4000;
+const pendingDeliveryChecks = new Map<string, NodeJS.Timeout>();
+
 export function userRoom(userId: string): string {
   return `user:${userId}`;
 }
@@ -208,12 +217,12 @@ export function registerSignalGateway(io: Server): void {
 
           // The recipient either has no live socket, or has one but isn't
           // actually looking at it right now (backgrounded app, unfocused
-          // tab) — either way a push is the only way to actually notify
+          // tab) -- either way a push is the only way to actually notify
           // them. The message itself is already safely delivered/queued
           // above regardless. Best-effort and fire-and-forget: never
           // blocks the ack, and the notification body stays generic since
           // the server has no plaintext to put in it either way.
-          if (!isUserVisible(payload.recipientId)) {
+          const notifyRecipient = () => {
             const threadKey = groupId ? `group:${groupId}` : userId;
             Promise.all([
               prisma.user.findUnique({ where: { id: payload.recipientId }, select: { fcmToken: true } }),
@@ -232,6 +241,17 @@ export function registerSignalGateway(io: Server): void {
                 }
               })
               .catch((err) => console.error("Failed to send push notification:", err));
+          };
+
+          if (!isUserVisible(payload.recipientId)) {
+            notifyRecipient();
+          } else {
+            // Looks reachable -- but only a DELIVERED receipt proves it.
+            const timer = setTimeout(() => {
+              pendingDeliveryChecks.delete(messageId);
+              notifyRecipient();
+            }, DELIVERY_ACK_GRACE_MS);
+            pendingDeliveryChecks.set(messageId, timer);
           }
         } catch {
           ack?.({ ok: false, error: "Failed to relay message." });
@@ -245,6 +265,12 @@ export function registerSignalGateway(io: Server): void {
         if (!isValidReceiptPayload(payload)) {
           ack?.({ ok: false, error: "Malformed signal:receipt payload." });
           return;
+        }
+
+        const pendingCheck = pendingDeliveryChecks.get(payload.messageId);
+        if (pendingCheck) {
+          clearTimeout(pendingCheck);
+          pendingDeliveryChecks.delete(payload.messageId);
         }
 
         try {
